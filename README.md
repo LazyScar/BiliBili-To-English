@@ -1,5 +1,10 @@
 # BiliBili-To-English
-BiliBili is a video platform that only has a Chinese version. To translate its content into English, you can use a Chrome extension. This extension works on browsers like Chrome, Bing, Brave, Opera, and many more.
+BiliBili is a video platform that only has a Chinese version. To translate its content into English, you can use a Chrome extension. This extension works on browsers like Chrome, Bing, Firefox, Brave, Opera, and many more.
+
+## Using FireFox?
+<p align="left">
+  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/"><img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png"></a>
+</p>
 
 # Features
 
