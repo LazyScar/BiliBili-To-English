@@ -1,21 +1,32 @@
 {
+  "manifest_version": 3,
   "name": "BiliBili To English",
   "version": "1.2.1",
   "description": "Translate BiliBili To English.",
-  "manifest_version": 3,
   "author": "WavaDev",
-  "host_permissions": ["https://*.bilibili.com/*"],
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.bilibili.com/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://*.bilibili.com/*"],
-      "js": ["dictionary.js", "main.js"]
+      "matches": [
+        "https://*.bilibili.com/*"
+      ],
+      "js": [
+        "dictionary.js",
+        "main.js"
+      ]
     }
   ],
   "icons": {
-    "16" : "icon16.png",
-    "32" : "icon32.png",
-    "48" : "icon48.png",
-    "64" : "icon64.png",
+    "16": "icon16.png",
+    "32": "icon32.png", 
+    "48": "icon48.png",
+    "64": "icon64.png",
     "128": "icon128.png"
   },
   "action": {
@@ -24,6 +35,11 @@
       "32": "icon32.png",
       "64": "icon64.png",
       "128": "icon128.png"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bilibili-translator@bilibili.com"
     }
   }
 }
