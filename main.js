@@ -1,180 +1,191 @@
-const translationCache = {};
-
-const ongoingRequests = {};
-
+const translationCache = new Map();
+const ongoingRequests = new Set();
 const MAX_TRANSLATION_LENGTH = 800;
+const TRANSLATION_CACHE_DURATION = 600000;
+const PROCESS_INTERVAL = 500;
+const MUTATION_OBSERVER_CONFIG = { 
+    childList: true, 
+    subtree: true 
+};
 
-function replaceText() {
-    const textNodes = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-    let node;
+async function translateText(text) {
+    try {
+        const chunks = splitTextIntoChunks(text, MAX_TRANSLATION_LENGTH);
+        const translatedChunks = [];
 
-    while (node = textNodes.nextNode()) {
-        const parentElement = node.parentElement;
-        let originalText = node.nodeValue.trim();
+        for (const chunk of chunks) {
+            const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(chunk)}`);
+            const data = await response.json();
 
-        if (parentElement.id === 'h-name' || node.processed) continue;
-
-        if (originalText !== '') {
-            if (translationCache[originalText]) {
-                node.nodeValue = translationCache[originalText];
-                node.processed = true;
-            } else if (!ongoingRequests[originalText]) {
-                let translatedText = dictionary[originalText.toLowerCase()];
-
-                if (translatedText) {
-                    node.nodeValue = translatedText;
-                    translationCache[originalText] = translatedText;
-                    node.processed = true;
-                    setTimeout(() => {
-                        delete translationCache[originalText];
-                    }, 600000);
-                } else {
-                    ongoingRequests[originalText] = true;
-                    translateText(node, originalText);
-                }
+            if (data && data[0] && data[0][0] && data[0][0][0]) {
+                translatedChunks.push(data[0][0][0]);
             }
         }
+
+        return translatedChunks.join(' ');
+    } catch (error) {
+        console.error("Translation error:", error);
+        return null;
     }
+}
+
+function processNode(node, translateFunction) {
+    const originalText = node.nodeValue ? node.nodeValue.trim() : 
+                         node.textContent ? node.textContent.trim() : '';
     
-    const inputElements = document.querySelectorAll('input[placeholder], textarea[placeholder]');
-    inputElements.forEach(element => {
-        if (element.dataset.processed) return;
-        
-        const originalPlaceholder = element.placeholder.trim();
+    if (!originalText) return;
 
-        if (originalPlaceholder !== '') {
-            if (translationCache[originalPlaceholder]) {
-                element.placeholder = translationCache[originalPlaceholder];
-                element.dataset.processed = true; // Mark element as processed
-            } else if (!ongoingRequests[originalPlaceholder]) {
-                let translatedPlaceholder = dictionary[originalPlaceholder.toLowerCase()];
+    if (node.processed || 
+        (node.parentElement && node.parentElement.id === 'h-name')) {
+        return;
+    }
 
-                if (translatedPlaceholder) {
-                    element.placeholder = translatedPlaceholder;
-                    translationCache[originalPlaceholder] = translatedPlaceholder;
-                    element.dataset.processed = true;
-                    setTimeout(() => {
-                        delete translationCache[originalPlaceholder];
-                    }, 600000);
-                } else {
-                    ongoingRequests[originalPlaceholder] = true;
-                    translatePlaceholderText(element, originalPlaceholder);
-                }
-            }
-        }
-    });
+    const cachedTranslation = translationCache.get(originalText);
+    const dictionaryTranslation = dictionary[originalText.toLowerCase()];
 
-    const contentsElement = document.getElementById('contents');
-    if (contentsElement) {
-        const spanElements = contentsElement.querySelectorAll('span');
-        spanElements.forEach(span => {
-            const originalSpanText = span.textContent.trim();
+    if (cachedTranslation) {
+        node.nodeValue ? node.nodeValue = cachedTranslation : 
+        node.textContent = cachedTranslation;
+        node.processed = true;
+        return;
+    }
 
-            if (originalSpanText !== '' && !span.dataset.processed) {
-                if (translationCache[originalSpanText]) {
-                    span.textContent = translationCache[originalSpanText];
-                    span.dataset.processed = true;
-                } else if (!ongoingRequests[originalSpanText]) {
-                    ongoingRequests[originalSpanText] = true;
-                    translateText(span, originalSpanText);
-                }
+    if (dictionaryTranslation) {
+        node.nodeValue ? node.nodeValue = dictionaryTranslation : 
+        node.textContent = dictionaryTranslation;
+        translationCache.set(originalText, dictionaryTranslation);
+        node.processed = true;
+        return;
+    }
+
+    if (ongoingRequests.has(originalText)) return;
+
+    ongoingRequests.add(originalText);
+    translateFunction(node, originalText);
+}
+
+function setupDynamicContentObserver() {
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation.type === 'childList') {
+                mutation.addedNodes.forEach((addedNode) => {
+                    if (addedNode.nodeType === Node.ELEMENT_NODE) {
+                        processAddedElement(addedNode);
+                    }
+                });
             }
         });
-    }
+    });
 
-    const commentElement = document.getElementById('comment');
-    if (commentElement) {
-        const commentTextNodes = document.createTreeWalker(commentElement, NodeFilter.SHOW_TEXT, null, false);
-        let commentNode;
-
-        while (commentNode = commentTextNodes.nextNode()) {
-            let commentOriginalText = commentNode.nodeValue.trim();
-
-            if (commentOriginalText !== '' && !commentNode.processed) {
-                if (translationCache[commentOriginalText]) {
-                    commentNode.nodeValue = translationCache[commentOriginalText];
-                    commentNode.processed = true;
-                } else if (!ongoingRequests[commentOriginalText]) {
-                    ongoingRequests[commentOriginalText] = true;
-                    translateText(commentNode, commentOriginalText);
-                }
-            }
-        }
-    }
+    observer.observe(document.body, MUTATION_OBSERVER_CONFIG);
 }
 
-function isTextNodeInViewport(node) {
-    const rect = node.parentElement.getBoundingClientRect();
-    return (
-        rect.top >= 0 &&
-        rect.left >= 0 &&
-        rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-        rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+function processAddedElement(element) {
+    if (element.nodeType !== Node.ELEMENT_NODE) return;
+
+    const textNodes = [];
+    const walker = document.createTreeWalker(
+        element, 
+        NodeFilter.SHOW_TEXT, 
+        null, 
+        false
     );
-}
 
-async function translateText(node, text) {
-    try {
-        const chunks = splitTextIntoChunks(text, MAX_TRANSLATION_LENGTH);
-        const translatedChunks = [];
-
-        for (const chunk of chunks) {
-            const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(chunk)}`);
-            const data = await response.json();
-
-            if (data && data[0] && data[0][0] && data[0][0][0]) {
-                translatedChunks.push(data[0][0][0]);
-            }
-        }
-
-        const translatedText = translatedChunks.join(' ');
-        node.nodeValue = translatedText;
-        translationCache[text] = translatedText;
-        node.processed = true;
-
-        setTimeout(() => {
-            delete translationCache[text];
-        }, 600000);
-
-        delete ongoingRequests[text];
-    } catch (error) {
-        console.error("Translation error:", error);
-        setTimeout(() => {
-            delete ongoingRequests[text];
-        }, 500);
+    let node;
+    while (node = walker.nextNode()) {
+        textNodes.push(node);
     }
+
+    textNodes.forEach(textNode => {
+        processNode(textNode, async (nodeToTranslate, text) => {
+            const translatedText = await translateText(text);
+            if (translatedText) {
+                nodeToTranslate.nodeValue = translatedText;
+                translationCache.set(text, translatedText);
+                nodeToTranslate.processed = true;
+
+                setTimeout(() => {
+                    translationCache.delete(text);
+                }, TRANSLATION_CACHE_DURATION);
+            }
+            ongoingRequests.delete(text);
+        });
+    });
+
+    const placeholderElements = element.querySelectorAll('input[placeholder], textarea[placeholder]');
+    placeholderElements.forEach(processPlaceholderElement);
 }
 
-async function translatePlaceholderText(element, text) {
-    try {
-        const chunks = splitTextIntoChunks(text, MAX_TRANSLATION_LENGTH);
-        const translatedChunks = [];
+function processPlaceholderElement(element) {
+    if (element.dataset.processed) return;
 
-        for (const chunk of chunks) {
-            const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(chunk)}`);
-            const data = await response.json();
+    const originalPlaceholder = element.placeholder.trim();
+    
+    if (!originalPlaceholder) return;
 
-            if (data && data[0] && data[0][0] && data[0][0][0]) {
-                translatedChunks.push(data[0][0][0]);
-            }
-        }
+    const cachedTranslation = translationCache.get(originalPlaceholder);
+    const dictionaryTranslation = dictionary[originalPlaceholder.toLowerCase()];
 
-        const translatedPlaceholder = translatedChunks.join(' ');
-        element.placeholder = translatedPlaceholder;
-        translationCache[text] = translatedPlaceholder;
+    if (cachedTranslation) {
+        element.placeholder = cachedTranslation;
         element.dataset.processed = true;
-
-        setTimeout(() => {
-            delete translationCache[text];
-        }, 600000);
-
-        delete ongoingRequests[text];
-    } catch (error) {
-        console.error("Translation error:", error);
-        setTimeout(() => {
-            delete ongoingRequests[text];
-        }, 500);
+        return;
     }
+
+    if (dictionaryTranslation) {
+        element.placeholder = dictionaryTranslation;
+        translationCache.set(originalPlaceholder, dictionaryTranslation);
+        element.dataset.processed = true;
+        return;
+    }
+
+    if (ongoingRequests.has(originalPlaceholder)) return;
+
+    ongoingRequests.add(originalPlaceholder);
+    
+    translateText(originalPlaceholder).then(translatedText => {
+        if (translatedText) {
+            element.placeholder = translatedText;
+            translationCache.set(originalPlaceholder, translatedText);
+            element.dataset.processed = true;
+
+            setTimeout(() => {
+                translationCache.delete(originalPlaceholder);
+            }, TRANSLATION_CACHE_DURATION);
+        }
+        ongoingRequests.delete(originalPlaceholder);
+    });
+}
+
+function processTextNodes() {
+    const textNodes = document.createTreeWalker(
+        document.body, 
+        NodeFilter.SHOW_TEXT, 
+        null, 
+        false
+    );
+
+    let node;
+    while (node = textNodes.nextNode()) {
+        processNode(node, async (nodeToTranslate, text) => {
+            const translatedText = await translateText(text);
+            if (translatedText) {
+                nodeToTranslate.nodeValue = translatedText;
+                translationCache.set(text, translatedText);
+                nodeToTranslate.processed = true;
+
+                setTimeout(() => {
+                    translationCache.delete(text);
+                }, TRANSLATION_CACHE_DURATION);
+            }
+            ongoingRequests.delete(text);
+        });
+    }
+}
+
+function processPlaceholders() {
+    const inputElements = document.querySelectorAll('input[placeholder], textarea[placeholder]');
+    inputElements.forEach(processPlaceholderElement);
 }
 
 function splitTextIntoChunks(text, maxLength) {
@@ -197,12 +208,16 @@ function splitTextIntoChunks(text, maxLength) {
     return chunks;
 }
 
-async function initialize() {
-    replaceText();
+function replaceText() {
+    processTextNodes();
+    processPlaceholders();
 }
 
-setInterval(function() {
+function initialize() {
     replaceText();
-}, 500);
+    setupDynamicContentObserver();
+}
+
+setInterval(replaceText, PROCESS_INTERVAL);
 
 initialize();
