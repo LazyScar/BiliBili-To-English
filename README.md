@@ -6,7 +6,7 @@ BiliBili is a video platform that only has a Chinese version. To translate its c
   <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/"><img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png"></a>
 </p>
 
-# Features
+# 🔥Features
 
 - Real-time translation of captions
 - Comprehensive translation for the entire page, including buttons and menus
@@ -17,7 +17,7 @@ BiliBili is a video platform that only has a Chinese version. To translate its c
 ![image](https://github.com/user-attachments/assets/594ffde2-3be6-4e05-8a40-51bc9b1cbf54)
 
 
-## How it works
+## ⚡How it works
 It starts by checking a file called `dictionary.js` to switch Chinese words to English. If it finds a word/sentence not in the file, it uses Google Translate for the translation. This whole process is quick, usually taking just 0.5 seconds to translate what's on your screen. Moreover, it can translate text even if you don't refresh the page.
 
 ## Installation Instructions:
@@ -35,6 +35,6 @@ To install this Chrome extension, follow these steps:
 - Improve the efficiency of the translation code to reduce loading times.
 - Optimize the dictionary.js file with more comprehensive entries to minimize reliance on Google Translate.
 
-## Credits
+## 🤝 Credits
 Made By **WavaDev**,
 and the `dictionary.js` file was taken from [XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension).
