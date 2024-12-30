@@ -42,6 +42,10 @@ To install this Chrome extension, follow these steps:
 - Improve the efficiency of the translation code to reduce loading times.
 - Optimize the dictionary.js file with more comprehensive entries to minimize reliance on Google Translate.
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=WavaDev/BiliBili-To-English&type=Date)](https://star-history.com/#WavaDev/BiliBili-To-English&Date)
+
 ## 🤝 Credits
 Made By **WavaDev**,
 and the `dictionary.js` file was taken from [XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension).
