@@ -47,5 +47,5 @@ To install this Chrome extension, follow these steps:
 [![Star History Chart](https://api.star-history.com/svg?repos=LazyScar/BiliBili-To-English&type=Date)](https://star-history.com/#WavaDev/BiliBili-To-English&Date)
 
 ## 🤝 Credits
-Made By **WavaDev**,
+Made By **LazyScar**,
 and the `dictionary.js` file was taken from [XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension).
