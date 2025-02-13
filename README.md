@@ -44,7 +44,7 @@ To install this Chrome extension, follow these steps:
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=LazyScar/BiliBili-To-English&type=Date)](https://star-history.com/#WavaDev/BiliBili-To-English&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=LazyScar/BiliBili-To-English&type=Date)](https://star-history.com/#LazyScar/BiliBili-To-English&Date)
 
 ## 🤝 Credits
 Made By **LazyScar**,
