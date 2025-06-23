@@ -1,10 +1,7 @@
-console.log("[BiliBili-Translator] main.js script started.");
-
 const translationCache = new Map();
 const ongoingRequests = new Set();
 const MAX_TRANSLATION_LENGTH = 800;
 const TRANSLATION_CACHE_DURATION = 60000;
-const PROCESS_INTERVAL = 500;
 const MUTATION_OBSERVER_CONFIG = {
     childList: true,
     subtree: true
@@ -12,7 +9,6 @@ const MUTATION_OBSERVER_CONFIG = {
 
 function initializeLanguageManager() {
     if (typeof window.languageManager === 'undefined') {
-        console.error('BiliBili-Translator: languageManager.js did not load correctly. Using fallback.');
         window.languageManager = {
             getCurrentLanguage: () => 'en',
             getTranslation: (text) => enDictionary[text.toLowerCase()] || null,
