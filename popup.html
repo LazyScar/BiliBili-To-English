@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BiliBili Translator</title>
+    <style>
+        body {
+            width: 300px;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .header p {
+            margin: 5px 0 0 0;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .language-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .language-section h2 {
+            margin: 0 0 15px 0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .language-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .language-option {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 2px solid transparent;
+        }
+
+        .language-option:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .language-option.selected {
+            border-color: #4CAF50;
+            background: rgba(76, 175, 80, 0.2);
+        }
+
+        .language-flag {
+            font-size: 20px;
+            margin-right: 12px;
+        }
+
+        .language-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 10px;
+        }
+
+        .footer {
+            text-align: center;
+            font-size: 10px;
+            opacity: 0.6;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌐 BiliBili Translator</h1>
+        <p>Choose your preferred language</p>
+    </div>
+
+    <div class="language-section">
+        <h2>Available Languages</h2>
+        <div class="language-options" id="languageOptions">
+            <!-- Language options will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <div class="status" id="status">
+        Current language: <span id="currentLanguage">English</span>
+    </div>
+
+    <div class="footer">
+        Made with ❤️ by LazyScar
+    </div>
+
+    <script src="languages/en.js"></script>
+    <script src="languages/fr.js"></script>
+    <script src="languages/languageManager.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html> 
