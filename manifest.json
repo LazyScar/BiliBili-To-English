@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "1.4.0",
-  "description": "Translate BiliBili content to multiple languages including English and French.",
+  "version": "1.5.2",
+  "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://*.bilibili.com/*"],
