@@ -1,6 +1,6 @@
 # How to Contribute a New Language
 
-We are thrilled that you want to contribute to the BiliBili Multi-Language Translator! Adding a new language is a great way to help users from all over the world.
+We are thrilled that you want to contribute to the BiliBili To English! Adding a new language is a great way to help users from all over the world.
 
 Follow these steps to add a new language:
 
@@ -46,6 +46,7 @@ First, create a fork of the main repository on GitHub. This will create a copy o
     this.availableLanguages = {
       en: { name: "English", flag: "🇺🇸" },
       fr: { name: "Français", flag: "🇫🇷" },
+      ru: { name: 'Русский', flag: '🇷🇺' }
       es: { name: "Español", flag: "🇪🇸" }, // Add your new language here
     };
     ```
