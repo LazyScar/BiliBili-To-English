@@ -4,8 +4,16 @@
   "version": "1.5.2",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://*.bilibili.com/*"],
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "optional_permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.bilibili.com/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -21,7 +29,9 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.bilibili.com/*"],
+      "matches": [
+        "https://*.bilibili.com/*"
+      ],
       "js": [
         "languages/en.js",
         "languages/fr.js",
@@ -29,7 +39,13 @@
         "languages/languageManager.js",
         "main.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bilibili-to-english@lazyscar",
+      "strict_min_version": "109.0"
+    }
+  }
 }
