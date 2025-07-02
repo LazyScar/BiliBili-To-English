@@ -20,7 +20,7 @@ BiliBili is a video platform that only has a Chinese version. To translate its c
 
 ### Screenshot:
 
-![image](https://github.com/user-attachments/assets/594ffde2-3be6-4e05-8a40-51bc9b1cbf54)
+![image](https://github.com/user-attachments/assets/4c1f9051-a5b1-4e5e-ba06-933dc95b85fa)
 
 ## ⚡How it works
 
