@@ -44,7 +44,7 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "bilibili-to-english@lazyscar",
+      "id": "bilibili-translator@bilibili.com",
       "strict_min_version": "109.0"
     }
   }
