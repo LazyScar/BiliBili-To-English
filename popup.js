@@ -2,17 +2,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     const languageOptions = document.getElementById('languageOptions');
     const currentLanguageSpan = document.getElementById('currentLanguage');
     
-    // Initialize language manager
     await languageManager.initialize();
     
-    // Get current language
     const currentLang = languageManager.getCurrentLanguage();
     const availableLanguages = languageManager.getAvailableLanguages();
     
-    // Update current language display
     currentLanguageSpan.textContent = availableLanguages[currentLang]?.name || 'English';
     
-    // Populate language options
     Object.entries(availableLanguages).forEach(([code, lang]) => {
         const option = document.createElement('div');
         option.className = `language-option ${code === currentLang ? 'selected' : ''}`;
@@ -39,12 +35,12 @@ document.addEventListener('DOMContentLoaded', async function() {
                                     language: code
                                 });
                             } catch (messageError) {
-                                // Content script not ready or not on BiliBili page
+                                
                             }
                         }
                     }
                 } catch (error) {
-                    // Tab not available or not a BiliBili page
+
                 }
             }
         });
