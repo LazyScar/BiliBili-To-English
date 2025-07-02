@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "BiliBili Multi-Language Translator",
+  "name": "BiliBili To English",
   "version": "1.4.0",
   "description": "Translate BiliBili content to multiple languages including English and French.",
-  "author": "LazyScar & Gemini",
-  "permissions": ["storage"],
+  "author": "LazyScar",
+  "permissions": ["storage", "tabs"],
   "host_permissions": ["https://*.bilibili.com/*"],
   "action": {
     "default_popup": "popup.html",
@@ -25,6 +25,7 @@
       "js": [
         "languages/en.js",
         "languages/fr.js",
+        "languages/ru.js",
         "languages/languageManager.js",
         "main.js"
       ],
