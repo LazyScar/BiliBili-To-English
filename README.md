@@ -14,7 +14,7 @@ BiliBili is a video platform that only has a Chinese version. To translate its c
 - **Beautiful language selection popup**: Easy-to-use interface with flags and language names
 - **Real-time translation of captions**
 - **Comprehensive translation for the entire page**, including buttons and menus
-- **Real-time translation of comments on **manga.bilibili.com** (note: does not function on **bilibili.com\*\*)
+- **Real-time translation of comments on **manga.bilibili.com** (note: does not function on **bilibili.com**)**
 - **Instant translation of video titles, views, and likes**
 - **Language persistence**: Your language choice is saved and remembered
 
@@ -61,13 +61,19 @@ To install this Chrome extension, follow these steps:
 5. The page will automatically translate to your selected language
 6. Your language preference is saved for future visits
 
-## Todo List
+# Todo List
 
 - Add more language support (Spanish, German, Japanese, etc.)
 - Fix the issue that it doesn't translate the comments of videos on `bilibili.com`
 - Improve the efficiency of the translation code to reduce loading times.
 - Optimize the language dictionary files with more comprehensive entries to minimize reliance on Google Translate.
 - Add language-specific UI themes
+
+## 🤝 Contributing
+
+Love what you see? Want to add a new language or help improve the extension?  
+See our [Contribution Guidelines](CONTRIBUTION.md) to get started!
+
 
 ## ⭐ Star History
 
