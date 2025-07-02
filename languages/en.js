@@ -1,4 +1,4 @@
-var dictionary = {
+const enDictionary = {
 	"我关注的主播": "Followed",
 	"我的稿件": "My Manuscript",
 	"预约": "Reserve",
@@ -298,4 +298,4 @@ var dictionary = {
 	"原创": "Original ",
 	"": "",
 	"": "",
-};
+}; 
