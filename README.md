@@ -1,6 +1,6 @@
-# BiliBili Multi-Language Translator
+# BiliBili To English
 
-BiliBili is a video platform that only has a Chinese version. To translate its content into multiple languages, you can use this extension. This extension works on browsers like Chrome, Bing, Firefox, Brave, Opera, and many more.
+BiliBili is a video platform that only has a Chinese version. To translate its content into English or multiple languages, you can use this extension. This extension works on browsers like Chrome, Bing, Firefox, Brave, Opera, and many more.
 
 ## Using FireFox?
 
@@ -10,7 +10,7 @@ BiliBili is a video platform that only has a Chinese version. To translate its c
 
 # 🔥Features
 
-- **Multi-language support**: Translate to English, French, and more languages coming soon!
+- **Multi-language support**: Translate to English, French, Russian and more languages coming soon!
 - **Beautiful language selection popup**: Easy-to-use interface with flags and language names
 - **Real-time translation of captions**
 - **Comprehensive translation for the entire page**, including buttons and menus
@@ -30,6 +30,7 @@ It starts by checking language-specific dictionary files to switch Chinese words
 
 - **English** 🇺🇸 - Complete translation dictionary
 - **French** 🇫🇷 - Complete translation dictionary
+- **Russian** 🇷🇺 - Complete translation dictionary
 - More languages coming soon!
 
 ## Installation Instructions:
