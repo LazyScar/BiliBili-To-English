@@ -13,9 +13,11 @@ const translationCache    = new Map();
 const pendingTranslations = new Map();
 
 const observedRoots = new WeakSet();
+const activeObservers = new Set();
 
-let commentBatchTimer        = null;
-let currentCommentContainer  = null;
+let commentBatchTimer = null;
+let currentCommentContainer = null;
+let BTE_ENABLED = true;
 
 function initializeLanguageManager() {
   if (!window.languageManager) {
@@ -64,6 +66,7 @@ async function fetchGoogleTranslation(text, lang) {
 }
 
 function getTranslation(text) {
+  if (!BTE_ENABLED) return Promise.resolve({ trans: null, source: 'disabled' });
   const lang = window.languageManager.getCurrentLanguage();
   const dictTrans = window.languageManager.getTranslation(text);
   if (dictTrans) return Promise.resolve({ trans: dictTrans, source: 'dict' });
@@ -78,9 +81,8 @@ function getTranslation(text) {
     .then(gt => {
       translationCache.set(key, gt);
       setTimeout(() => translationCache.delete(key), CACHE_DURATION);
-      return gt
-        ? { trans: gt, source: 'google' }
-        : { trans: null, source: 'google' };
+      if (!BTE_ENABLED) return { trans: null, source: 'disabled' };
+      return gt ? { trans: gt, source: 'google' } : { trans: null, source: 'google' };
     })
     .finally(() => pendingTranslations.delete(key));
   pendingTranslations.set(key, p);
@@ -88,6 +90,7 @@ function getTranslation(text) {
 }
 
 function processTextNode(node) {
+  if (!BTE_ENABLED) return;
   const original = node._origValue !== undefined
     ? node._origValue
     : node.nodeValue;
@@ -115,8 +118,8 @@ function processTextNode(node) {
     return;
   }
 
-  const origCore = core;
   getTranslation(core).then(({ trans, source }) => {
+    if (!BTE_ENABLED) return;
     if (
       trans &&
       node._origValue === original &&
@@ -133,6 +136,7 @@ function processTextNode(node) {
 
 const ATTRS = ['alt','placeholder','title','aria-label','value'];
 function processAttributes(el) {
+  if (!BTE_ENABLED) return;
   for (const attr of ATTRS) {
     if (!el.hasAttribute(attr)) continue;
     const currentVal = el.getAttribute(attr);
@@ -161,6 +165,7 @@ function processAttributes(el) {
     }
 
     getTranslation(raw).then(({ trans }) => {
+      if (!BTE_ENABLED) return;
       if (trans && el._attrOrig[attr] === raw) {
         el.setAttribute(attr, trans);
         el._attrSource[attr]    = 'google';
@@ -171,6 +176,7 @@ function processAttributes(el) {
 }
 
 function walkDOM(root) {
+  if (!BTE_ENABLED || !root) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL, null, false);
   let node;
   while (node = walker.nextNode()) {
@@ -180,6 +186,7 @@ function walkDOM(root) {
 }
 
 function onMutations(muts) {
+  if (!BTE_ENABLED) return;
   const app   = document.getElementById('commentapp');
   const bili  = app?.querySelector('bili-comments');
   const cont  = bili ? (bili.shadowRoot || bili) : null;
@@ -209,15 +216,26 @@ function observeRoot(root) {
   if (observedRoots.has(root)) return;
   observedRoots.add(root);
   walkDOM(root);
-  new MutationObserver(onMutations).observe(root, OBSERVER_CONFIG);
+  const obs = new MutationObserver(onMutations);
+  obs.observe(root, OBSERVER_CONFIG);
+  activeObservers.add(obs);
+}
+
+function stopObservers() {
+  activeObservers.forEach(o => o.disconnect());
+  activeObservers.clear();
+  observedRoots.clear();
+  clearTimeout(commentBatchTimer);
 }
 
 function scheduleCommentBatch(container) {
+  if (!BTE_ENABLED) return;
   if (currentCommentContainer !== container) {
     currentCommentContainer = container;
   }
   clearTimeout(commentBatchTimer);
   commentBatchTimer = setTimeout(() => {
+    if (!BTE_ENABLED) return;
     if ('requestIdleCallback' in window) {
       requestIdleCallback(() => walkDOM(currentCommentContainer), { timeout: 500 });
     } else {
@@ -228,6 +246,7 @@ function scheduleCommentBatch(container) {
 
 function pollForComments() {
   const iv = setInterval(() => {
+    if (!BTE_ENABLED) { clearInterval(iv); return; }
     const app  = document.getElementById('commentapp');
     const bili = app?.querySelector('bili-comments');
     if (!bili) return;
@@ -239,6 +258,7 @@ function pollForComments() {
 function pollForDict(lang) {
   const name = `${lang}Dictionary`;
   const iv = setInterval(() => {
+    if (!BTE_ENABLED) { clearInterval(iv); return; }
     const d = window[name];
     if (d && typeof d === 'object' && Object.keys(d).length > 0) {
       clearInterval(iv);
@@ -247,38 +267,40 @@ function pollForDict(lang) {
   }, 200);
 }
 
+function start() {
+  if (!BTE_ENABLED) return;
+  observeRoot(document.body);
+  document.querySelectorAll('*').forEach(el => {
+    if (el.shadowRoot) observeRoot(el.shadowRoot);
+  });
+  pollForComments();
+  pollForDict(window.languageManager.getCurrentLanguage());
+}
+
 function initialize() {
   initializeLanguageManager();
 
-  const start = () => {
-    observeRoot(document.body);
-    document.querySelectorAll('*').forEach(el => {
-      if (el.shadowRoot) observeRoot(el.shadowRoot);
-    });
-    pollForComments();
-    pollForDict(window.languageManager.getCurrentLanguage());
+  const afterPrefs = () => {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
   };
 
   if (chrome?.storage?.sync) {
-    chrome.storage.sync.get(['selectedLanguage'], (result) => {
+    chrome.storage.sync.get(['selectedLanguage','enabled'], (result) => {
       if (result.selectedLanguage) {
         const lang = result.selectedLanguage;
         window.languageManager.switchLanguage(lang);
         translationCache.clear();
         pendingTranslations.clear();
       }
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start);
-      } else {
-        start();
-      }
+      BTE_ENABLED = result.enabled !== false;
+      afterPrefs();
     });
   } else {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', start);
-    } else {
-      start();
-    }
+    afterPrefs();
   }
 
   if (chrome?.runtime) {
@@ -287,10 +309,24 @@ function initialize() {
         window.languageManager.switchLanguage(msg.language);
         translationCache.clear();
         pendingTranslations.clear();
-        walkDOM(document.body);
-        pollForComments();
-        pollForDict(msg.language);
-        resp({ success: true });
+        if (BTE_ENABLED) {
+          walkDOM(document.body);
+          pollForComments();
+          pollForDict(msg.language);
+        }
+        resp && resp({ success: true });
+      } else if (
+        msg?.type === 'toggleTranslation' ||
+        msg?.action === 'toggleTranslation' ||
+        msg?.action === 'setEnabled'
+      ) {
+        BTE_ENABLED = !!msg.enabled;
+        if (BTE_ENABLED) {
+          start();
+        } else {
+          stopObservers();
+        }
+        resp && resp({ success: true });
       }
       return true;
     });

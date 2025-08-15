@@ -1,125 +1,125 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BiliBili To English</title>
-    <style>
-        body {
-            width: 300px;
-            padding: 20px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-
-        .header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-
-        .header h1 {
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-        }
-
-        .header p {
-            margin: 5px 0 0 0;
-            font-size: 12px;
-            opacity: 0.8;
-        }
-
-        .language-section {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-
-        .language-section h2 {
-            margin: 0 0 15px 0;
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .language-options {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .language-option {
-            display: flex;
-            align-items: center;
-            padding: 10px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            border: 2px solid transparent;
-        }
-
-        .language-option:hover {
-            background: rgba(255, 255, 255, 0.2);
-            transform: translateY(-1px);
-        }
-
-        .language-option.selected {
-            border-color: #4CAF50;
-            background: rgba(76, 175, 80, 0.2);
-        }
-
-        .language-flag {
-            font-size: 20px;
-            margin-right: 12px;
-        }
-
-        .language-name {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .status {
-            text-align: center;
-            font-size: 12px;
-            opacity: 0.8;
-            margin-top: 10px;
-        }
-
-        .footer {
-            text-align: center;
-            font-size: 10px;
-            opacity: 0.6;
-            margin-top: 15px;
-        }
-    </style>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BiliBili To English</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+  <style>
+    .bg-card{background:rgba(255,255,255,.08)}
+    .bg-hover{background:rgba(255,255,255,1)}
+    .border-border{border-color:rgba(255,255,255,.18)}
+    .text-accent{color:#60a5fa}
+    .text-secondary{color:rgba(255,255,255,.85)}
+    .text-tertiary{color:rgba(255,255,255,.65)}
+    #toggleBtn{background:rgba(255,255,255,.15)}
+    #toggleBtn .toggle-circle{left:.25rem}
+    #toggleBtn.active .toggle-circle{transform:translateX(1.5rem)}
+    #toggleBtn .toggle-circle,#darkModeToggle .toggle-circle-sm{background:#fff}
+    #darkModeToggle{background:rgba(255,255,255,.15)}
+    #darkModeToggle .toggle-circle-sm{left:.25rem}
+    #darkModeToggle.active .toggle-circle-sm{transform:translateX(1.25rem)}
+    body{color:#e5e7eb;background:radial-gradient(1000px 600px at -10% -10%,rgba(99,102,241,.35),transparent 60%),radial-gradient(900px 600px at 110% -10%,rgba(59,130,246,.35),transparent 60%),#0b1020}
+    .light-mode{color:#111827;background:#f3f4f6}
+    .select-wrap{position:relative}
+    select.custom-select{-webkit-appearance:none;appearance:none;background-color:rgba(17,24,39,.9);color:#e5e7eb;border:1px solid rgba(255,255,255,.18);border-radius:.75rem;padding:.75rem 2.5rem .75rem 1rem;width:100%;transition:border-color .2s,box-shadow .2s,background-color .2s;backdrop-filter:blur(6px);outline:none}
+    select.custom-select:focus{box-shadow:0 0 0 3px rgba(59,130,246,.35);border-color:rgba(59,130,246,.6)}
+    select.custom-select:hover{background-color:rgba(17,24,39,.95)}
+    .select-wrap .chev{position:absolute;right:.75rem;top:50%;transform:translateY(-50%);pointer-events:none}
+    .light-mode select.custom-select{background:#ffffff;color:#111827;border-color:rgba(0,0,0,.12)}
+    .light-mode .select-wrap .chev{color:#3b82f6}
+    select.custom-select option{background:#111827;color:#e5e7eb}
+    .light-mode select.custom-select option{background:#ffffff;color:#111827}
+  </style>
 </head>
-<body>
-    <div class="header">
-        <h1>🌐 BiliBili To English</h1>
-        <p>Choose your preferred language</p>
-    </div>
-
-    <div class="language-section">
-        <h2>Available Languages</h2>
-        <div class="language-options" id="languageOptions">
+<body class="font-sans transition-colors duration-300">
+  <div class="w-80 min-h-64 overflow-hidden rounded-3xl shadow-xl" id="app-container">
+    <div class="relative p-6 backdrop-filter backdrop-blur-sm" id="main-container">
+      <div class="absolute top-0 left-0 right-0 h-20 bg-gradient-to-r from-blue-500 to-indigo-600 opacity-10"></div>
+      <div class="absolute -top-5 -right-8 w-24 h-24 bg-gradient-to-b from-blue-400 to-indigo-600 opacity-10 blur-xl"></div>
+      <header class="header relative z-10 flex justify-between items-center mb-6">
+        <div class="flex items-center space-x-3">
+          <span class="text-3xl font-black tracking-tighter">B<span class="text-accent">i</span></span>
+          <div class="h-5 w-px bg-white bg-opacity-30"></div>
+          <span class="text-xs font-bold uppercase tracking-wider text-accent">TO ENGLISH</span>
         </div>
+        <button id="settingsBtn" class="focus:outline-none p-2 rounded-full transition-all duration-300 transform hover:rotate-90 hover:bg-opacity-10 hover:bg-blue-500">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
+        </button>
+      </header>
+      <div class="relative z-10">
+        <div id="main-controls">
+          <div class="flex items-center justify-between mb-6 px-1">
+            <div class="flex items-center space-x-2 bg-blue-500 bg-opacity-10 py-1 px-3 rounded-full">
+              <span id="statusIndicator" class="inline-block w-2 h-2 rounded-full"></span>
+              <span id="statusText" class="text-xs font-medium text-secondary">INACTIVE</span>
+            </div>
+            <div class="text-xs text-tertiary opacity-60">BiliBili To English</div>
+          </div>
+          <div id="toggle-card" class="relative mb-6 rounded-2xl p-5 shadow-lg overflow-hidden group cursor-pointer backdrop-filter backdrop-blur-sm bg-card border border-border">
+            <div class="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-blue-400 to-indigo-600 opacity-50"></div>
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold mb-1">Translation</h3>
+                <p class="text-xs text-secondary opacity-80">Tap to enable/disable</p>
+              </div>
+              <button id="toggleBtn" class="relative h-10 w-16 rounded-full transition-colors duration-300 flex items-center px-1 focus:outline-none focus:ring focus:ring-blue-400 focus:ring-opacity-30">
+                <span class="toggle-circle absolute w-8 h-8 rounded-full shadow-lg transition-all duration-300 flex items-center justify-center">
+                  <svg id="powerIcon" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v8m6.364-4.364a9 9 0 11-12.728 0"/></svg>
+                </span>
+              </button>
+            </div>
+            <div class="absolute inset-0 bg-hover opacity-0 group-hover:opacity-5 transition-opacity duration-300 pointer-events-none"></div>
+          </div>
+        </div>
+        <div id="settingsMenu" class="hidden mb-6 rounded-2xl p-5 shadow-lg overflow-hidden border border-border bg-card bg-opacity-70 backdrop-filter backdrop-blur-sm">
+          <h2 class="font-semibold text-accent mb-5 flex items-center text-sm">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
+            SETTINGS
+          </h2>
+          <div class="mb-6">
+            <label class="block text-tertiary mb-2 text-xs font-medium uppercase">Target Language</label>
+            <div class="relative select-wrap">
+              <select id="languageSelect" class="custom-select"></select>
+              <div class="chev text-accent">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="block text-tertiary mb-2 text-xs font-medium uppercase">Appearance</label>
+            <div class="flex items-center justify-between p-3 rounded-xl border border-border bg-card">
+              <div class="flex items-center space-x-3">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                <span class="text-sm">Dark Mode</span>
+              </div>
+              <button id="darkModeToggle" class="relative h-6 w-11 rounded-full transition-colors duration-300 flex items-center px-1 focus:outline-none focus:ring focus:ring-blue-400 focus:ring-opacity-30">
+                <span class="toggle-circle-sm absolute w-4 h-4 rounded-full shadow-md transition-all duration-300"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="relative z-10 mt-auto">
+        <div class="border-t border-border pt-4 mt-6">
+          <div class="grid grid-cols-2 gap-4">
+            <a href="https://github.com/LazyScar/BiliBili-To-English" target="_blank" class="flex items-center justify-center p-2 rounded-lg transition-colors duration-300 hover:bg-white hover:bg-opacity-10 backdrop-filter backdrop-blur-sm">
+              <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.268 2.75 1.026A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.026 2.747-1.026.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
+              <span class="text-sm">GitHub</span>
+            </a>
+            <div class="text-center p-2 rounded-lg bg-card bg-opacity-50 backdrop-filter backdrop-blur-sm">
+              <div class="text-xs text-tertiary mb-1 opacity-60">VERSION</div>
+              <div class="text-accent font-mono font-medium">2.0</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-
-    <div class="status" id="status">
-        Current language: <span id="currentLanguage">English</span>
-    </div>
-
-    <div class="footer">
-        Made with ❤️ by LazyScar
-    </div>
-
-    <script src="languages/en.js"></script>
-    <script src="languages/fr.js"></script>
-    <script src="languages/ru.js"></script>
-    <script src="languages/languageManager.js"></script>
-    <script src="popup.js"></script>
+  </div>
+  <script src="languages/en.js"></script>
+  <script src="languages/fr.js"></script>
+  <script src="languages/ru.js"></script>
+  <script src="languages/languageManager.js"></script>
+  <script src="popup.js"></script>
 </body>
-</html> 
+</html>
