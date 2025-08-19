@@ -1,5 +1,5 @@
-<p align="right">
-🇨🇳 <a href="#简体中文">简体中文</a> | 🇷🇺 <a href="#русский">Русский</a> | 🇺🇸 <a href="#english">English</a>
+<p align="left">
+🇨🇳 <a href="#">简体中文</a> | 🇷🇺 <a href="#">Русский</a> | 🇺🇸 <a href="#">English</a>
 </p>
 
 # <a name="english"></a>BiliBili To English
