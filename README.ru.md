@@ -1,4 +1,4 @@
-<p align="right">
+<p align="left">
 🇨🇳 <a href="./README.zh-CN.md">简体中文</a> | 🇷🇺 Русский | 🇺🇸 <a href="./README.md">English</a>
 </p>
 
