@@ -1,82 +1,124 @@
+# <img src="https://raw.githubusercontent.com/LazyScar/BiliBili-To-English/refs/heads/main/icon128.png" height="50"> BiliBili To English
+
+Translate and enjoy BiliBili in English or other languages — in real time, directly on the page.
+
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/LazyScar/BiliBili-To-English?label=latest%20version&sort=semver)](https://github.com/LazyScar/BiliBili-To-English/releases)
+[![GitHub release date](https://img.shields.io/github/release-date/LazyScar/BiliBili-To-English)](https://github.com/LazyScar/BiliBili-To-English/releases/latest)
+[![GitHub issues](https://img.shields.io/github/issues/LazyScar/BiliBili-To-English?color=red)](https://github.com/LazyScar/BiliBili-To-English/issues)
+[![GitHub license](https://img.shields.io/github/license/LazyScar/BiliBili-To-English?color=lightgrey)](https://github.com/LazyScar/BiliBili-To-English/blob/main/LICENSE)
+
 <p align="left">
 🇨🇳 <a href="./README.zh-CN.md">简体中文</a> | 🇷🇺 <a href="./README.ru.md">Русский</a> | 🇺🇸 English
 </p>
 
-# BiliBili To English
+---
 
-BiliBili is a video platform that only support Chinese. That's why to translate it's ui, videos, captions into English or multiple languages, you can use this extension. This extension supports browsers like Chrome, Bing, Firefox, Brave, Opera, and many more. 
+## Overview
 
-## Using FireFox?
+**BiliBili To English** is a browser extension designed to translate **BiliBili’s interface, videos, and captions** into English or multiple other languages.  
+It supports **Chrome, Firefox, Brave, Opera, Edge**, and other Chromium/FireFox-based browsers.
 
-<p align="left">
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/"><img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png"></a>
-</p>
+This extension enables users to enjoy BiliBili content seamlessly in their preferred language translating UI elements, comments, and video information **instantly**, without opening new tabs or refreshing the page.
 
-### 🔥 Features
+---
 
-- **Multi-language support**: Translate to English, French, Russian and more languages coming soon!
-- **Beautiful language selection popup**: Easy-to-use interface with flags and language names
-- **Real-time translation of captions**
-- **Comprehensive translation for the entire page**, including buttons and menus
-- **Real-time translation of comments on _manga.bilibili.com_**
-- **Instant translation of video titles, views, and likes**
-- **Language persistence**: Your language choice is saved and remembered
-
-![image](https://github.com/user-attachments/assets/4c1f9051-a5b1-4e5e-ba06-933dc95b85fa)
-
-## ⚡ How it works
-
-It starts by checking language-specific dictionary files to switch Chinese words to your selected language. If it finds a word/sentence not in the dictionary, it uses Google Translate. It usually takes just **0.5 seconds** and works even if you don’t refresh the page.
-
-## 🌐 Supported Languages
-
-- English 🇺🇸
-- French 🇫🇷
-- Russian 🇷🇺
-- More languages coming soon!
-
-## Installation Instructions
+## Install
 
 ### Firefox
-
 <p align="left">
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/"><img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png"></a>
+  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
+    <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
+  </a>
 </p>
 
-### Chrome / Brave / Opera / Bing
+### Chrome, Brave, Opera, and Edge
+- Currently in manual installation phase.
+- To install manually:
+  1. Download this repository as a ZIP file.
+  2. Extract it to a folder.
+  3. Open your browser and navigate to `chrome://extensions/`.
+  4. Enable **Developer mode** (top right corner).
+  5. Click **Load unpacked** and select the extracted folder.
+  6. Once loaded, you can disable **Developer mode**.
 
-1. Download this repository as a ZIP file  
-2. Go to `chrome://extensions/` in your browser  
-3. Enable **Developer mode**  
-4. Click **Load unpacked** and select the extracted folder  
-5. (Optional) click the refresh icon  
-6. Disable Developer mode
+---
 
-## 🎯 How to Use
+## Features
 
-1. Install the extension  
-2. Open any BiliBili page  
-3. Click the extension icon  
-4. Select your language  
-5. Enjoy automatic translation
+- **Multi-language support** – Translate to English, French, Russian, and more (with additional languages coming soon).  
+- **Beautiful language selection interface** – Clean popup menu with flag icons and language names.  
+- **Real-time translation of captions** – Automatically translates video subtitles.  
+- **Full-page translation** – Translates buttons, menus, and UI elements.  
+- **Comment translation** – Works on `manga.bilibili.com` and other subdomains.  
+- **Instant content translation** – Titles, views, likes, and more are instantly translated.  
+- **Language persistence** – Your selected language is remembered automatically.
 
-## ✅ Todo List
+| Preview |
+| :--: |
+| <img src="https://github.com/user-attachments/assets/4c1f9051-a5b1-4e5e-ba06-933dc95b85fa" height="200"> |
 
-- Add more language support (Spanish, German, Japanese, etc.)
-- Fix untranslated comments on `bilibili.com`
-- Improve translation efficiency
-- Optimize dictionary files
-- Add language-specific UI themes
+---
 
-## 🤝 Contributing
+## How It Works
 
-See [CONTRIBUTION.md](CONTRIBUTION.md) to get started!
+The extension uses a combination of **dictionary-based word matching** and **automatic translation engines**.
 
-## ⭐ Star History
+1. When a page loads, it checks a local dictionary for common Chinese terms.
+2. If a term is not found, it uses the **Google Translate API** (or other supported engines) for dynamic translation.
+3. Updates appear in real time — usually within **0.5 seconds** — without reloading the page.
+
+---
+
+## Supported Languages
+
+- English 🇺🇸  
+- French 🇫🇷  
+- Russian 🇷🇺  
+- More languages coming soon!
+
+---
+
+## How to Use
+
+1. Install the extension for your browser.  
+2. Open any BiliBili page.  
+3. Click the **BiliBili To English** icon in your toolbar.  
+4. Select your preferred language.  
+5. Enjoy automatic translation instantly.
+
+---
+
+## Contribute
+
+Want to help improve translations or add support for new languages?  
+See [CONTRIBUTION.md](CONTRIBUTION.md) to get started.
+
+We welcome developers and translators to collaborate.
+
+---
+
+## FAQ
+
+**What does this extension do?**  
+It translates the BiliBili interface, captions, comments, and video information in real time.
+
+**Why does it need permission to access all sites?**  
+To perform translations, the extension must modify and replace text on web pages — which requires access to their content.
+
+**Which translation engines are supported?**  
+Currently, the extension uses dictionary-based translations and Google Translate (more options are planned).
+
+**Does it collect data?**  
+No personal data is collected. However, to perform translations, some text may be sent to translation servers (e.g., Google).
+
+---
+
+## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=LazyScar/BiliBili-To-English&type=Date)](https://star-history.com/#LazyScar/BiliBili-To-English&Date)
 
-## 🤝 Credits
+---
 
-Made by **LazyScar**  
-Dictionary based on work by [XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)
+## Credits
+
+Developed and maintained by **[LazyScar](https://github.com/LazyScar)** · Dictionary and translation logic inspired by **[XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)** · Special thanks to all open-source contributors, testers, and the **BiliBili community** for their ongoing support.
