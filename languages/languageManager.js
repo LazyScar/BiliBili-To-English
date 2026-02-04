@@ -4,6 +4,7 @@ class LanguageManager {
         this.availableLanguages = {
             'en': { name: 'English', flag: '🇬🇧' },
             'fr': { name: 'Français', flag: '🇫🇷' },
+            'ja': { name: '日本語', flag: '🇯🇵' },
             'ru': { name: 'Русский', flag: '🇷🇺' }
         };
         this.dictionary = enDictionary;
@@ -35,6 +36,9 @@ class LanguageManager {
                 break;
             case 'fr':
                 this.dictionary = frDictionary;
+                break;
+            case 'ja':
+                this.dictionary = jaDictionary;
                 break;
             case 'ru':
                 this.dictionary = ruDictionary;

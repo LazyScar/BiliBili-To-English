@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": [
@@ -35,6 +35,7 @@
       "js": [
         "languages/en.js",
         "languages/fr.js",
+        "languages/ja.js",
         "languages/ru.js",
         "languages/languageManager.js",
         "main.js"

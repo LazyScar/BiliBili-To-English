@@ -73,6 +73,7 @@ The extension uses a combination of **dictionary-based word matching** and **aut
 
 - English 🇺🇸  
 - French 🇫🇷  
+- Japanese 🇯🇵  
 - Russian 🇷🇺  
 - More languages coming soon!
 
