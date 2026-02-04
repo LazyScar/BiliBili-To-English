@@ -122,4 +122,5 @@ No personal data is collected. However, to perform translations, some text may b
 
 ## Credits
 
-Developed and maintained by **[LazyScar](https://github.com/LazyScar)** · Dictionary and translation logic inspired by **[XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)** · Special thanks to all open-source contributors, testers, and the **BiliBili community** for their ongoing support.
+Developed by **[LazyScar](https://github.com/LazyScar)** · Inspired by **[XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)** · Thanks to the open-source contributors and the BiliBili community
+
