@@ -48,12 +48,12 @@ This extension enables users to enjoy BiliBili content seamlessly in their prefe
 - **Multi-language support** – Translate to English, French, Russian, Japanese and more (with additional languages coming soon).  
 - **Beautiful language selection interface** – Clean popup menu with flag icons and language names.  
 - **Real-time translation of captions** – Automatically translates video subtitles.  
-- **Full-page translation** – Translates buttons, menus, and UI elements.
+- **Full-page translation** – Translates buttons, menus, and UI elements. (Include the Creator/Studio Page)
 - **Language persistence** – Your selected language is remembered automatically.
 
-| Preview |
-| :--: |
-| <img src="https://github.com/user-attachments/assets/4c1f9051-a5b1-4e5e-ba06-933dc95b85fa" height="200"> |
+| Main | Video | Comments | Creator/Studio |
+| :--: | :--: | :--: | :--: |
+| <img height="100" src="https://github.com/user-attachments/assets/75418edd-e1e4-4006-9db1-2c75c4328df7" /> | <img height="100" src="https://github.com/user-attachments/assets/05240571-4f36-4362-bc53-5ad8e86b70e8" /> | <img height="100" src="https://github.com/user-attachments/assets/f67bffbd-77ae-4b7c-a21f-b1ff3af3e6d0" /> | <img height="100" src="https://github.com/user-attachments/assets/fd405262-df4f-4f3e-955b-00e1856c6d64" /> |
 
 ---
 
