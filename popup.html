@@ -1,126 +1,634 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BiliBili To English</title>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
   <style>
-    .bg-card{background:rgba(255,255,255,.08)}
-    .bg-hover{background:rgba(255,255,255,1)}
-    .border-border{border-color:rgba(255,255,255,.18)}
-    .text-accent{color:#60a5fa}
-    .text-secondary{color:rgba(255,255,255,.85)}
-    .text-tertiary{color:rgba(255,255,255,.65)}
-    #toggleBtn{background:rgba(255,255,255,.15)}
-    #toggleBtn .toggle-circle{left:.25rem}
-    #toggleBtn.active .toggle-circle{transform:translateX(1.5rem)}
-    #toggleBtn .toggle-circle,#darkModeToggle .toggle-circle-sm{background:#fff}
-    #darkModeToggle{background:rgba(255,255,255,.15)}
-    #darkModeToggle .toggle-circle-sm{left:.25rem}
-    #darkModeToggle.active .toggle-circle-sm{transform:translateX(1.25rem)}
-    body{color:#e5e7eb;background:radial-gradient(1000px 600px at -10% -10%,rgba(99,102,241,.35),transparent 60%),radial-gradient(900px 600px at 110% -10%,rgba(59,130,246,.35),transparent 60%),#0b1020}
-    .light-mode{color:#111827;background:#f3f4f6}
-    .select-wrap{position:relative}
-    select.custom-select{-webkit-appearance:none;appearance:none;background-color:rgba(17,24,39,.9);color:#e5e7eb;border:1px solid rgba(255,255,255,.18);border-radius:.75rem;padding:.75rem 2.5rem .75rem 1rem;width:100%;transition:border-color .2s,box-shadow .2s,background-color .2s;backdrop-filter:blur(6px);outline:none}
-    select.custom-select:focus{box-shadow:0 0 0 3px rgba(59,130,246,.35);border-color:rgba(59,130,246,.6)}
-    select.custom-select:hover{background-color:rgba(17,24,39,.95)}
-    .select-wrap .chev{position:absolute;right:.75rem;top:50%;transform:translateY(-50%);pointer-events:none}
-    .light-mode select.custom-select{background:#ffffff;color:#111827;border-color:rgba(0,0,0,.12)}
-    .light-mode .select-wrap .chev{color:#3b82f6}
-    select.custom-select option{background:#111827;color:#e5e7eb}
-    .light-mode select.custom-select option{background:#ffffff;color:#111827}
+    :root {
+      --bg: #0f1116;
+      --card: #151823;
+      --card-2: #121520;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --text: #e9edf7;
+      --text-soft: rgba(233, 237, 247, 0.68);
+      --text-dim: rgba(233, 237, 247, 0.52);
+      --accent: #ff3f8f;
+      --accent-2: rgba(255, 63, 143, 0.22);
+      --ok: #46d183;
+      --warn: #f5be47;
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    body.light {
+      --bg: #f2f5fb;
+      --card: #ffffff;
+      --card-2: #f7f9fc;
+      --border: rgba(19, 34, 64, 0.12);
+      --border-strong: rgba(19, 34, 64, 0.16);
+      --text: #0e1626;
+      --text-soft: rgba(14, 22, 38, 0.68);
+      --text-dim: rgba(14, 22, 38, 0.52);
+      --accent: #d92974;
+      --accent-2: rgba(217, 41, 116, 0.14);
+      --ok: #228f56;
+      --warn: #b57c08;
+      --shadow: 0 14px 40px rgba(20, 30, 60, 0.16);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 348px;
+      max-height: 560px;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    body {
+      color: var(--text);
+      background:
+        radial-gradient(420px 220px at -10% -12%, rgba(255, 63, 143, 0.18), transparent 58%),
+        radial-gradient(420px 220px at 110% -8%, rgba(92, 150, 255, 0.12), transparent 58%),
+        var(--bg);
+      font-family: "Segoe UI", "Helvetica Neue", "Noto Sans", sans-serif;
+    }
+
+    .panel {
+      background: rgba(0, 0, 0, 0.06);
+      padding: 10px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      font-size: 13px;
+    }
+
+    .pill {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-soft);
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .card {
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 10px 10px 8px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .card-title {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.38px;
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0;
+      border: 0;
+    }
+
+    .rows {
+      display: grid;
+    }
+
+    .row-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      min-height: 40px;
+      background: rgba(0, 0, 0, 0.06);
+    }
+
+    .row-item + .row-item {
+      border-top: 1px solid var(--border);
+    }
+
+    .row-left {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .row-label {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-sub {
+      font-size: 11px;
+      color: var(--text-soft);
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-right {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11px;
+    }
+
+    select,
+    input[type="password"],
+    input[type="text"] {
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+      min-width: 140px;
+    }
+
+    select {
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--text-soft) 50%),
+        linear-gradient(135deg, var(--text-soft) 50%, transparent 50%);
+      background-position:
+        calc(100% - 16px) calc(1em + 2px),
+        calc(100% - 11px) calc(1em + 2px);
+      background-size:
+        6px 6px,
+        6px 6px;
+      background-repeat: no-repeat;
+      padding-right: 30px;
+    }
+
+    select:focus,
+    input:focus {
+      border-color: rgba(255, 63, 143, 0.60);
+      box-shadow: 0 0 0 2px var(--accent-2);
+    }
+
+    .inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-soft);
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff5f5f;
+    }
+
+    .dot.on { background: var(--ok); }
+
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      display: inline-block;
+      flex: 0 0 auto;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22);
+      transition: background 0.18s ease;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    .slider::before {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 3px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffffff;
+      transition: transform 0.18s ease;
+    }
+
+    input:checked + .slider {
+      background: var(--accent);
+      border-color: transparent;
+    }
+
+    input:checked + .slider::before {
+      transform: translateX(20px);
+    }
+
+    .checkbox {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .field-block {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .field-block .row-item {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .field-block .row-item + .row-item {
+      border-top: 1px solid var(--border);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .btn {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-size: 13px;
+      padding: 10px 10px;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .btn:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--accent-2);
+      border-color: rgba(255, 63, 143, 0.55);
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      border-color: transparent;
+      color: #ffffff;
+      font-weight: 700;
+    }
+
+    .btn.ghost {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .btn.warn {
+      color: var(--warn);
+      border-color: rgba(245, 190, 71, 0.35);
+    }
+
+    .full {
+      width: 100%;
+    }
+
+    .hintbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .hint {
+      font-size: 11px;
+      color: var(--text-soft);
+      min-height: 14px;
+    }
+
+    .update-tag {
+      font-size: 11px;
+      color: var(--warn);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .select-compact {
+      min-width: 0;
+      width: 100%;
+    }
+
+    .right-wide {
+      width: 165px;
+    }
+
+    .small-note {
+      padding: 10px;
+      border-top: 1px solid var(--border);
+      color: var(--text-soft);
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.05);
+    }
   </style>
 </head>
-<body class="font-sans transition-colors duration-300">
-  <div class="w-80 min-h-64 overflow-hidden rounded-3xl shadow-xl" id="app-container">
-    <div class="relative p-6 backdrop-filter backdrop-blur-sm" id="main-container">
-      <div class="absolute top-0 left-0 right-0 h-20 bg-gradient-to-r from-blue-500 to-indigo-600 opacity-10"></div>
-      <div class="absolute -top-5 -right-8 w-24 h-24 bg-gradient-to-b from-blue-400 to-indigo-600 opacity-10 blur-xl"></div>
-      <header class="header relative z-10 flex justify-between items-center mb-6">
-        <div class="flex items-center space-x-3">
-          <span class="text-3xl font-black tracking-tighter">B<span class="text-accent">i</span></span>
-          <div class="h-5 w-px bg-white bg-opacity-30"></div>
-          <span class="text-xs font-bold uppercase tracking-wider text-accent">TO ENGLISH</span>
-        </div>
-        <button id="settingsBtn" class="focus:outline-none p-2 rounded-full transition-all duration-300 transform hover:rotate-90 hover:bg-opacity-10 hover:bg-blue-500">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
-        </button>
-      </header>
-      <div class="relative z-10">
-        <div id="main-controls">
-          <div class="flex items-center justify-between mb-6 px-1">
-            <div class="flex items-center space-x-2 bg-blue-500 bg-opacity-10 py-1 px-3 rounded-full">
-              <span id="statusIndicator" class="inline-block w-2 h-2 rounded-full"></span>
-              <span id="statusText" class="text-xs font-medium text-secondary">INACTIVE</span>
-            </div>
-            <div class="text-xs text-tertiary opacity-60">BiliBili To English</div>
-          </div>
-          <div id="toggle-card" class="relative mb-6 rounded-2xl p-5 shadow-lg overflow-hidden group cursor-pointer backdrop-filter backdrop-blur-sm bg-card border border-border">
-            <div class="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-blue-400 to-indigo-600 opacity-50"></div>
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-lg font-semibold mb-1">Translation</h3>
-                <p class="text-xs text-secondary opacity-80">Tap to enable/disable</p>
-              </div>
-              <button id="toggleBtn" class="relative h-10 w-16 rounded-full transition-colors duration-300 flex items-center px-1 focus:outline-none focus:ring focus:ring-blue-400 focus:ring-opacity-30">
-                <span class="toggle-circle absolute w-8 h-8 rounded-full shadow-lg transition-all duration-300 flex items-center justify-center">
-                  <svg id="powerIcon" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v8m6.364-4.364a9 9 0 11-12.728 0"/></svg>
-                </span>
-              </button>
-            </div>
-            <div class="absolute inset-0 bg-hover opacity-0 group-hover:opacity-5 transition-opacity duration-300 pointer-events-none"></div>
-          </div>
-        </div>
-        <div id="settingsMenu" class="hidden mb-6 rounded-2xl p-5 shadow-lg overflow-hidden border border-border bg-card bg-opacity-70 backdrop-filter backdrop-blur-sm">
-          <h2 class="font-semibold text-accent mb-5 flex items-center text-sm">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
-            SETTINGS
-          </h2>
-          <div class="mb-6">
-            <label class="block text-tertiary mb-2 text-xs font-medium uppercase">Target Language</label>
-            <div class="relative select-wrap">
-              <select id="languageSelect" class="custom-select"></select>
-              <div class="chev text-accent">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
-              </div>
-            </div>
-          </div>
-          <div class="mb-3">
-            <label class="block text-tertiary mb-2 text-xs font-medium uppercase">Appearance</label>
-            <div class="flex items-center justify-between p-3 rounded-xl border border-border bg-card">
-              <div class="flex items-center space-x-3">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
-                <span class="text-sm">Dark Mode</span>
-              </div>
-              <button id="darkModeToggle" class="relative h-6 w-11 rounded-full transition-colors duration-300 flex items-center px-1 focus:outline-none focus:ring focus:ring-blue-400 focus:ring-opacity-30">
-                <span class="toggle-circle-sm absolute w-4 h-4 rounded-full shadow-md transition-all duration-300"></span>
-              </button>
-            </div>
-          </div>
-        </div>
+<body>
+  <div class="app">
+    <div class="panel">
+      <div class="topbar">
+        <div class="brand">BiliBili To English</div>
+        <div class="pill mono" id="appVersion">v2.0.1</div>
       </div>
-      <div class="relative z-10 mt-auto">
-        <div class="border-t border-border pt-4 mt-6">
-          <div class="grid grid-cols-2 gap-4">
-            <a href="https://github.com/LazyScar/BiliBili-To-English" target="_blank" class="flex items-center justify-center p-2 rounded-lg transition-colors duration-300 hover:bg-white hover:bg-opacity-10 backdrop-filter backdrop-blur-sm">
-              <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.268 2.75 1.026A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.026 2.747-1.026.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/></svg>
-              <span class="text-sm">GitHub</span>
-            </a>
-            <div class="text-center p-2 rounded-lg bg-card bg-opacity-50 backdrop-filter backdrop-blur-sm">
-              <div class="text-xs text-tertiary mb-1 opacity-60">VERSION</div>
-              <div class="text-accent font-mono font-medium">2.0</div>
+
+      <!-- Translation Engine -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">Translation</div>
+          <div class="status-pill">
+            <span class="dot" id="statusDot"></span>
+            <span id="statusText">INACTIVE</span>
+          </div>
+        </div>
+        <hr class="divider" />
+        <div class="rows">
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">Target language</div>
+              <div class="row-sub">Select the output language</div>
+            </div>
+            <div class="row-right right-wide">
+              <select id="languageSelect" class="select-compact"></select>
+            </div>
+          </div>
+
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">Enabled</div>
+              <div class="row-sub">Turn translation on or off</div>
+            </div>
+            <div class="row-right">
+              <label class="switch" aria-label="Enabled">
+                <input type="checkbox" id="enabledToggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">Service</div>
+              <div class="row-sub">Choose a translation provider</div>
+            </div>
+            <div class="row-right right-wide">
+              <select id="engineSelect" class="select-compact">
+                <option value="google">Google Translate</option>
+                <option value="microsoft">Microsoft Translator</option>
+                <option value="deepl">DeepL</option>
+              </select>
             </div>
           </div>
         </div>
-      </div>
+
+        <!-- DeepL section (kept, restyled) -->
+        <div id="deeplSection" class="field-block">
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">DeepL key</div>
+              <div class="row-sub">Stored locally in extension storage</div>
+            </div>
+            <div class="row-right right-wide">
+              <input type="password" id="deeplKey" class="select-compact" />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="row-item">
+              <div class="row-left">
+                <div class="row-label">Endpoint</div>
+                <div class="row-sub">Auto, Free, or Pro</div>
+              </div>
+              <div class="row-right">
+                <select id="deeplEndpoint" class="select-compact">
+                  <option value="auto">Endpoint: Auto</option>
+                  <option value="free">Endpoint: Free</option>
+                  <option value="pro">Endpoint: Pro</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row-item">
+              <div class="row-left">
+                <div class="row-label">Fallback to Google</div>
+                <div class="row-sub">If DeepL fails</div>
+              </div>
+              <div class="row-right">
+                <input type="checkbox" id="deeplFallback" class="checkbox" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Microsoft section (kept, restyled) -->
+        <div id="microsoftSection" class="small-note">
+          No API key required.
+        </div>
+      </section>
+
+      <!-- Exclude Areas -->
+      <section class="card" style="margin-top:10px;">
+        <div class="card-header">
+          <div class="card-title">Exclude areas</div>
+          <div class="pill">Skip translation in specific areas</div>
+        </div>
+        <hr class="divider" />
+        <div class="rows">
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Page UI</div></div>
+            <div class="row-right"><input type="checkbox" id="areaPage" class="checkbox" /></div>
+          </div>
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Comments</div></div>
+            <div class="row-right"><input type="checkbox" id="areaComments" class="checkbox" /></div>
+          </div>
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Dynamic feed</div></div>
+            <div class="row-right"><input type="checkbox" id="areaDynamic" class="checkbox" /></div>
+          </div>
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Danmaku</div></div>
+            <div class="row-right"><input type="checkbox" id="areaDanmaku" class="checkbox" /></div>
+          </div>
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Captions</div></div>
+            <div class="row-right"><input type="checkbox" id="areaCaptions" class="checkbox" /></div>
+          </div>
+          <div class="row-item">
+            <div class="row-left"><div class="row-label">Member/Creator Area</div></div>
+            <div class="row-right"><input type="checkbox" id="areaCreatorPages" class="checkbox" /></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Display Mode -->
+      <section class="card" style="margin-top:10px;">
+        <div class="card-header">
+          <div class="card-title">Display mode</div>
+          <div class="pill">Bilingual behavior</div>
+        </div>
+        <hr class="divider" />
+        <div class="field-block" style="border-top:none;">
+          <div class="grid-2">
+            <div class="row-item">
+              <div class="row-left"><div class="row-label">Page UI</div><div class="row-sub">Display mode</div></div>
+              <div class="row-right"><select id="bilingualPage" class="select-compact"></select></div>
+            </div>
+            <div class="row-item">
+              <div class="row-left"><div class="row-label">Comments</div><div class="row-sub">Display mode</div></div>
+              <div class="row-right"><select id="bilingualComments" class="select-compact"></select></div>
+            </div>
+            <div class="row-item">
+              <div class="row-left"><div class="row-label">Dynamic</div><div class="row-sub">Display mode</div></div>
+              <div class="row-right"><select id="bilingualDynamic" class="select-compact"></select></div>
+            </div>
+            <div class="row-item">
+              <div class="row-left"><div class="row-label">Danmaku</div><div class="row-sub">Display mode</div></div>
+              <div class="row-right"><select id="bilingualDanmaku" class="select-compact"></select></div>
+            </div>
+            <div class="row-item" style="grid-column: 1 / -1;">
+              <div class="row-left"><div class="row-label">Captions</div><div class="row-sub">Display mode</div></div>
+              <div class="row-right right-wide"><select id="bilingualCaptions" class="select-compact"></select></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cache & Performance -->
+      <section class="card" style="margin-top:10px;">
+        <div class="card-header">
+          <div class="card-title">Cache & performance</div>
+          <div class="pill">Storage and theme</div>
+        </div>
+        <hr class="divider" />
+        <div class="rows">
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">Enable cache</div>
+              <div class="row-sub">Reuse recent translations</div>
+            </div>
+            <div class="row-right">
+              <input type="checkbox" id="cacheEnabled" class="checkbox" />
+            </div>
+          </div>
+
+          <div class="row-item">
+            <div class="row-left">
+              <div class="row-label">Dark mode</div>
+              <div class="row-sub">Switch popup theme</div>
+            </div>
+            <div class="row-right">
+              <label class="switch" aria-label="Dark mode">
+                <input type="checkbox" id="darkModeToggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-block">
+          <button class="btn warn full" id="clearCacheBtn">Clear Translation Cache</button>
+        </div>
+
+        <div class="hintbar">
+          <span class="hint" id="saveHint"></span>
+          <span class="update-tag" id="updateStatus"></span>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <section class="card" style="margin-top:10px;">
+        <div class="btn-row">
+          <button class="btn ghost" id="githubBtn">GitHub</button>
+          <button class="btn ghost" id="docsBtn">Docs</button>
+          <button class="btn primary" id="updateBtn" style="display:none;">Update</button>
+        </div>
+      </section>
     </div>
   </div>
+
   <script src="languages/en.js"></script>
   <script src="languages/fr.js"></script>
   <script src="languages/ja.js"></script>
   <script src="languages/ru.js"></script>
   <script src="languages/languageManager.js"></script>
+  <script src="settings/Settings.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

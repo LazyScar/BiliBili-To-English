@@ -56,7 +56,12 @@ class LanguageManager {
 
     getTranslation(text) {
         if (!text) return null;
-        return this.dictionary[text.toLowerCase()] || null;
+        const exact = this.dictionary[text];
+        if (exact) return exact;
+        const lower = text.toLowerCase();
+        if (this.dictionary[lower]) return this.dictionary[lower];
+        const normalized = lower.replace(/\s+/g, ' ').trim();
+        return this.dictionary[normalized] || null;
     }
 
     async initialize() {

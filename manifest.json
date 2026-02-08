@@ -1,18 +1,26 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "1.6.0",
+  "version": "2.0.1",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": [
     "storage",
-    "activeTab"
-  ],
-  "optional_permissions": [
+    "activeTab",
     "tabs"
   ],
   "host_permissions": [
-    "https://*.bilibili.com/*"
+    "https://*.bilibili.com/*",
+    "https://*.hdslb.com/*",
+    "https://api.bilibili.com/*",
+    "https://translate.googleapis.com/*",
+    "https://api.deepl.com/*",
+    "https://api-free.deepl.com/*",
+    "https://edge.microsoft.com/*",
+    "https://api.cognitive.microsofttranslator.com/*",
+    "https://api.github.com/*",
+    "https://github.com/*",
+    "https://addons.mozilla.org/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -22,6 +30,9 @@
       "128": "icon128.png"
     }
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
@@ -30,7 +41,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.bilibili.com/*"
+        "http://*/*",
+        "https://*/*"
       ],
       "js": [
         "languages/en.js",
@@ -38,9 +50,19 @@
         "languages/ja.js",
         "languages/ru.js",
         "languages/languageManager.js",
+        "settings/Settings.js",
+        "translation/engines/google.js",
+        "translation/engines/deepl.js",
+        "translation/engines/microsoft.js",
+        "translation/TranslationManager.js",
+        "dom/DomTranslator.js",
+        "captions/CaptionManager.js",
         "main.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "browser_specific_settings": {
