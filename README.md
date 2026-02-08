@@ -45,12 +45,10 @@ This extension enables users to enjoy BiliBili content seamlessly in their prefe
 
 ## Features
 
-- **Multi-language support** – Translate to English, French, Russian, and more (with additional languages coming soon).  
+- **Multi-language support** – Translate to English, French, Russian, Japanese and more (with additional languages coming soon).  
 - **Beautiful language selection interface** – Clean popup menu with flag icons and language names.  
 - **Real-time translation of captions** – Automatically translates video subtitles.  
-- **Full-page translation** – Translates buttons, menus, and UI elements.  
-- **Comment translation** – Works on `manga.bilibili.com` and other subdomains.  
-- **Instant content translation** – Titles, views, likes, and more are instantly translated.  
+- **Full-page translation** – Translates buttons, menus, and UI elements.
 - **Language persistence** – Your selected language is remembered automatically.
 
 | Preview |
@@ -64,9 +62,8 @@ This extension enables users to enjoy BiliBili content seamlessly in their prefe
 The extension uses a combination of **dictionary-based word matching** and **automatic translation engines**.
 
 1. When a page loads, it checks a local dictionary for common Chinese terms.
-2. If a term is not found, it uses the **Google Translate API** (or other supported engines) for dynamic translation.
-3. Updates appear in real time — usually within **0.5 seconds** — without reloading the page.
-
+2. If a term is not found, it uses the **Translation Engines** for dynamic translation.
+3. Updates appear in real time.
 ---
 
 ## Supported Languages
@@ -107,10 +104,10 @@ It translates the BiliBili interface, captions, comments, and video information 
 To perform translations, the extension must modify and replace text on web pages — which requires access to their content.
 
 **Which translation engines are supported?**  
-Currently, the extension uses dictionary-based translations and Google Translate (more options are planned).
+Currently, the extension uses dictionary-based translations and Google Translate, Deepl, Microsoft Translator (more options are planned).
 
 **Does it collect data?**  
-No personal data is collected. However, to perform translations, some text may be sent to translation servers (e.g., Google).
+No personal data is collected. However, to perform translations, some text may be sent to translation servers (e.g., Google, Deppl, Bing).
 
 ---
 
