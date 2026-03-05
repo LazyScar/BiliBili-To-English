@@ -5,7 +5,8 @@ class LanguageManager {
             'en': { name: 'English', flag: '🇬🇧' },
             'fr': { name: 'Français', flag: '🇫🇷' },
             'ja': { name: '日本語', flag: '🇯🇵' },
-            'ru': { name: 'Русский', flag: '🇷🇺' }
+            'ru': { name: 'Русский', flag: '🇷🇺' },
+            'vi': { name: 'Tiếng Việt', flag: '🇻🇳' }
         };
         this.dictionary = enDictionary;
     }
@@ -42,6 +43,9 @@ class LanguageManager {
                 break;
             case 'ru':
                 this.dictionary = ruDictionary;
+                break;
+            case 'vi':
+                this.dictionary = viDictionary;
                 break;
             default:
                 this.dictionary = enDictionary;

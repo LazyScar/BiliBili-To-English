@@ -137,7 +137,13 @@
     }
 
     normalizeWhitespacePreservingLines(text) {
-      return String(text || "")
+      const s = String(text || "");
+      if (!s) return "";
+      // Fast path: no line breaks — avoids the split/map/filter/join pipeline.
+      if (!s.includes("\r") && !s.includes("\n")) {
+        return s.replace(/\s+/g, " ").trim();
+      }
+      return s
         .replace(/\r/g, "")
         .split("\n")
         .map((line) => line.replace(/\s+/g, " ").trim())
@@ -151,7 +157,13 @@
     }
 
     applyBoundarySpacing(text) {
-      return String(text || "")
+      const s = String(text || "");
+      if (!s) return s;
+      // Fast path: no Latin letters, digits, or operator characters present —
+      // none of the boundary rules can match, so skip all 7 regex passes.
+      // This covers the overwhelming majority of CJK subtitle lines.
+      if (!/[A-Za-z0-9+\/|]/.test(s)) return s;
+      return s
         .replace(/([A-Za-z])(\d)/g, "$1 $2")
         .replace(/(\d)([A-Za-z])/g, "$1 $2")
         .replace(/([\u4e00-\u9fff])(\d)/g, "$1 $2")

@@ -82,6 +82,16 @@
     /^\s*\d{1,2}[-/.]\d{1,2}([-.\/]\d{2,4})?(\s+\d{1,2}:\d{2}(:\d{2})?)?\s*$/,
   ];
 
+  // Pre-joined selector strings — avoids rebuilding on every node visit
+  const TIME_CONTAINER_SELECTOR = TIME_CONTAINER_SELECTORS.join(",");
+  const AREA_COMBINED_SELECTORS = {
+    comments: AREA_SELECTORS.comments.join(","),
+    dynamic: AREA_SELECTORS.dynamic.join(","),
+    danmaku: AREA_SELECTORS.danmaku.join(","),
+    captions: AREA_SELECTORS.captions.join(","),
+  };
+  const STRICT_ALLOWED_TAGS = new Set(["SPAN", "P", "A", "BUTTON", "LABEL", "H1", "H2", "H3", "LI", "DT", "DD"]);
+
   function isFormControl(el) {
     if (!el || !el.tagName) return false;
     const tag = el.tagName.toUpperCase();
@@ -136,6 +146,9 @@
       this.creatorGateStartedAt = 0;
       this.creatorGateUrl = "";
       this.handleMutations = this.handleMutations.bind(this);
+      this.titleObserver = null;
+      this.titleOriginal = "";
+      this.titleInjected = "";
     }
 
     async initialize() {
@@ -262,6 +275,8 @@
       this.queueNode(document.body);
       this.startCommentsPoll();
       this.startRescanPoll();
+      this.observePageTitle();
+      this.translatePageTitle();
     }
 
     stop(options) {
@@ -285,12 +300,21 @@
       this.clearCreatorGateTimer();
       this.creatorLayoutReady = true;
       this.creatorGateUrl = "";
+      if (this.titleObserver) {
+        this.titleObserver.disconnect();
+        this.titleObserver = null;
+      }
       if (restore) {
         this.restoreOriginals();
       }
     }
 
     restoreOriginals() {
+      if (this.titleOriginal && document.title === this.titleInjected) {
+        document.title = this.titleOriginal;
+      }
+      this.titleOriginal = "";
+      this.titleInjected = "";
       this.spacingNodes.forEach((node) => {
         if (node && node.isConnected) {
           node.remove();
@@ -363,6 +387,54 @@
           this.queueNode(biliComments.shadowRoot || biliComments);
         }
       }, intervalMs);
+    }
+
+    observePageTitle() {
+      if (this.titleObserver) {
+        this.titleObserver.disconnect();
+        this.titleObserver = null;
+      }
+      const titleEl = document.querySelector("title");
+      if (!titleEl) return;
+      this.titleObserver = new MutationObserver(() => {
+        if (!this.canRun()) return;
+        const current = document.title;
+        // Our own write — ignore to avoid infinite loop
+        if (current === this.titleInjected) return;
+        // Page changed the title (SPA navigation) — re-translate
+        this.titleOriginal = current;
+        this.titleInjected = "";
+        this.translatePageTitle();
+      });
+      this.titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+
+    translatePageTitle() {
+      if (!this.canRun()) return;
+      if (!this.settings?.areas?.page) return;
+      // Capture original on first call
+      if (!this.titleOriginal) {
+        const current = document.title;
+        if (!current || !current.trim()) return;
+        this.titleOriginal = current;
+      }
+      const source = this.titleOriginal;
+      if (!source || !source.trim()) return;
+      // Already applied with current source
+      if (document.title === this.titleInjected && this.titleInjected) return;
+      this.translationManager
+        .translate(source, {
+          targetLanguage: this.settings?.targetLanguage || "en",
+          area: "page",
+        })
+        .then((result) => {
+          if (!this.running) return;
+          const translated = result?.translation || null;
+          if (!translated || translated === source) return;
+          this.titleInjected = translated;
+          document.title = translated;
+        })
+        .catch(() => {});
     }
 
     observeRoot(root) {
@@ -707,10 +779,10 @@
 
     detectArea(element) {
       if (!element || !element.closest) return "page";
-      if (AREA_SELECTORS.comments.some((selector) => element.closest(selector))) return "comments";
-      if (AREA_SELECTORS.dynamic.some((selector) => element.closest(selector))) return "dynamic";
-      if (AREA_SELECTORS.danmaku.some((selector) => element.closest(selector))) return "danmaku";
-      if (AREA_SELECTORS.captions.some((selector) => element.closest(selector))) return "captions";
+      if (element.closest(AREA_COMBINED_SELECTORS.comments)) return "comments";
+      if (element.closest(AREA_COMBINED_SELECTORS.dynamic)) return "dynamic";
+      if (element.closest(AREA_COMBINED_SELECTORS.danmaku)) return "danmaku";
+      if (element.closest(AREA_COMBINED_SELECTORS.captions)) return "captions";
       return "page";
     }
 
@@ -732,14 +804,12 @@
     }
 
     isTimeContainer(element) {
-      if (!element || !element.matches) return false;
-      return TIME_CONTAINER_SELECTORS.some((selector) => {
-        try {
-          return !!element.closest(selector);
-        } catch (_error) {
-          return false;
-        }
-      });
+      if (!element || !element.closest) return false;
+      try {
+        return !!element.closest(TIME_CONTAINER_SELECTOR);
+      } catch (_error) {
+        return false;
+      }
     }
 
     isTimeLikeText(text) {
@@ -756,8 +826,7 @@
       if (parent && this.isTimeContainer(parent)) return true;
       if (this.isStrictCreatorMode()) {
         const tag = parent?.tagName ? parent.tagName.toUpperCase() : "";
-        const strictAllowed = new Set(["SPAN", "P", "A", "BUTTON", "LABEL", "H1", "H2", "H3", "LI", "DT", "DD"]);
-        if (!strictAllowed.has(tag)) return true;
+        if (!STRICT_ALLOWED_TAGS.has(tag)) return true;
       }
       return false;
     }
@@ -833,7 +902,6 @@
       if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return;
       if (!node.isConnected) return;
       if (this.shouldSkipElement(node.parentElement)) return;
-      if (node.parentElement.closest("[data-bte-owned='1']")) return;
       const area = this.detectArea(node.parentElement);
       if (!this.isAreaEnabled(area) || area === "captions") return;
       const mode = modeFromSettings(this.settings, area);
@@ -931,9 +999,13 @@
       if (!this.canRun()) return;
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (!element.isConnected) return;
-      const area = this.detectArea(element);
-      if (!this.isAreaEnabled(area) || area === "captions") return;
+      // shouldSkipElement is checked first: owned/SKIP_TAG/contenteditable elements
+      // exit before paying for detectArea's CSS closest() calls.
+      // It also guards area === "captions" internally, so isAreaEnabled only needs
+      // to check whether the surviving area is enabled.
       if (this.shouldSkipElement(element)) return;
+      const area = this.detectArea(element);
+      if (!this.isAreaEnabled(area)) return;
       const bucket = this.ensureAttrState(element);
       const titleCase = this.isLikelyTagElement(element);
       ATTRS.forEach((attr) => {

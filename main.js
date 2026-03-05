@@ -6,6 +6,7 @@
   let domTranslator = null;
   let captionManager = null;
   let routePoll = null;
+  let routeChangeDebounceTimer = null;
   let currentSettings = null;
   let initialized = false;
   let lastUrl = location.href;
@@ -71,17 +72,60 @@
     }
   }
 
+  function handleRouteChange() {
+    if (!currentSettings?.enabled) return;
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    const settings = settingsManager.getSettings();
+    currentSettings = settings;
+    applyLanguage(settings);
+    // DomTranslator: only restart if it was stopped (e.g. navigating back from an
+    // excluded route). When already running, intentionally skip queueNode(document.body):
+    // at navigation time the DOM still holds the previous page's content, and scanning
+    // it causes a visible flash of stale cached translations moments before BiliBili's
+    // SPA re-render replaces everything with fresh Chinese. The running MutationObserver
+    // handles new nodes as they are inserted; the rescanPoll is the safety net.
+    if (domTranslator && !domTranslator.running) {
+      domTranslator.updateSettings(settings);
+    }
+    // Caption manager clears old video state and starts prefetching the new video.
+    captionManager?.updateSettings(settings);
+  }
+
+  function scheduleRouteChange() {
+    if (routeChangeDebounceTimer) clearTimeout(routeChangeDebounceTimer);
+    routeChangeDebounceTimer = setTimeout(() => {
+      routeChangeDebounceTimer = null;
+      handleRouteChange();
+    }, 50);
+  }
+
+  function patchHistoryNavigate() {
+    // Guard against double-patching (e.g. two content script injections).
+    if (history.pushState?.__bte_patched) return;
+    const origPush = history.pushState;
+    const origReplace = history.replaceState;
+    history.pushState = function (...args) {
+      const result = origPush.apply(this, args);
+      scheduleRouteChange();
+      return result;
+    };
+    history.pushState.__bte_patched = true;
+    history.replaceState = function (...args) {
+      const result = origReplace.apply(this, args);
+      scheduleRouteChange();
+      return result;
+    };
+    history.replaceState.__bte_patched = true;
+    window.addEventListener("popstate", scheduleRouteChange);
+  }
+
   function startRoutePolling() {
+    patchHistoryNavigate();
     if (routePoll) clearInterval(routePoll);
-    routePoll = setInterval(async () => {
-      if (!currentSettings?.enabled) return;
-      if (location.href === lastUrl) return;
-      lastUrl = location.href;
-      await applySettings(settingsManager.getSettings());
-      if (captionManager && captionManager.prefetchCurrentVideo) {
-        captionManager.prefetchCurrentVideo(true);
-      }
-    }, 1000);
+    // Safety-net poll: catches hash-only changes and rare edge cases
+    // where pushState/replaceState was already overridden by another script.
+    routePoll = setInterval(handleRouteChange, 5000);
   }
 
   function registerRuntimeHandlers() {

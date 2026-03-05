@@ -41,14 +41,15 @@
   "content_scripts": [
     {
       "matches": [
-        "http://*/*",
-        "https://*/*"
+        "https://*.bilibili.com/*",
+        "http://*.bilibili.com/*"
       ],
       "js": [
         "languages/en.js",
         "languages/fr.js",
         "languages/ja.js",
         "languages/ru.js",
+        "languages/vi.js",
         "languages/languageManager.js",
         "settings/Settings.js",
         "translation/engines/google.js",
