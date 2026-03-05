@@ -72,6 +72,7 @@ The extension uses a combination of **dictionary-based word matching** and **aut
 - French 🇫🇷  
 - Japanese 🇯🇵  
 - Russian 🇷🇺  
+- Vietnamese 🇻🇳
 - More languages coming soon!
 
 ---
