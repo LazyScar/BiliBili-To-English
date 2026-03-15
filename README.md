@@ -108,7 +108,7 @@ To perform translations, the extension must modify and replace text on web pages
 Currently, the extension uses dictionary-based translations and Google Translate, Deepl, Microsoft Translator (more options are planned).
 
 **Does it collect data?**  
-No personal data is collected. However, to perform translations, some text may be sent to translation servers (e.g., Google, Deppl, Bing).
+No personal data is collected. However, to perform translations, some text may be sent to translation servers (e.g., Google, Deepl, Bing).
 
 ---
 
