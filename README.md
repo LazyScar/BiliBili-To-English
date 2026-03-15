@@ -39,7 +39,7 @@ This extension enables users to enjoy BiliBili content seamlessly in their prefe
   3. Open your browser and navigate to `chrome://extensions/`.
   4. Enable **Developer mode** (top right corner).
   5. Click **Load unpacked** and select the extracted folder.
-  6. Once loaded, you can disable **Developer mode**.
+  6. Once loaded, you can disable **Developer mode**. However, if you experience issues, keep it enabled.
 
 ---
 
