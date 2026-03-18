@@ -45,11 +45,11 @@
     "[role='menuitem']",
     "[role='option']",
   ];
-  const CAPTION_PRIORITY_AHEAD_SECONDS = 35;
+  const CAPTION_PRIORITY_AHEAD_SECONDS = 55;
   const CAPTION_PRIORITY_BEHIND_SECONDS = 8;
-  const CAPTION_IMMEDIATE_MAX_LINES = 18;
-  const CAPTION_BOOTSTRAP_LINES = 12;
-  const CAPTION_CRITICAL_LINES = 8;
+  const CAPTION_IMMEDIATE_MAX_LINES = 28;
+  const CAPTION_BOOTSTRAP_LINES = 18;
+  const CAPTION_CRITICAL_LINES = 12;
   const CAPTION_WINDOW_PREFETCH_LINES = 180;
   const CAPTION_WINDOW_AHEAD_SECONDS = 420;
   const CAPTION_WINDOW_BEHIND_SECONDS = 20;
@@ -57,6 +57,7 @@
   const CAPTION_FUTURE_PREFETCH_MAX_LINES = 260;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
   const CAPTION_PREFETCH_RETRY_MS = 320;
+  const CAPTION_PREFETCH_GRACE_MS = 450;
   const CAPTION_EXTRA_TRACK_LIMIT = 4;
   const CAPTION_CJK_LAN_PATTERN = /(zh|cmn|yue|cn|chs|cht|sc|tc)/i;
   const CAPTION_CJK_DOC_PATTERN = /(\u4e2d\u6587|\u6c49\u8bed|\u56fd\u8bed|\u7b80\u4f53|\u7e41\u4f53)/i;
@@ -296,6 +297,8 @@
           element.textContent = state.original;
         }
         element.style.whiteSpace = state.whiteSpace || "";
+        element.style.visibility = state.visibility || "";
+        state.hiddenPending = false;
       });
       this.elementState.clear();
     }
@@ -789,6 +792,11 @@
 
     shouldWaitForPrefetchForLine(line) {
       if (!this.currentSubtitleData || this.currentSubtitleData.prefetchPhase === "complete") return false;
+      // Give startup prefetch a brief head start, then allow the active line to fall back
+      // to an immediate request instead of staying untranslated on screen.
+      if (Date.now() - (this.currentSubtitleData.createdAt || 0) > CAPTION_PREFETCH_GRACE_MS) {
+        return false;
+      }
       const normalized = normalizeLine(line);
       if (!normalized) return false;
       const active = this.findActiveTimedLine(this.getVideoCurrentTime());
@@ -1219,14 +1227,17 @@
       return translated;
     }
 
-    queueFallbackCaptionTranslation(line) {
+    queueFallbackCaptionTranslation(line, options) {
       const normalized = normalizeLine(line);
       if (!normalized) return;
+      const force = !!options?.force;
       if (
+        !force &&
         this.currentSubtitleData &&
         this.currentSubtitleData.prefetchPhase === "initial" &&
         this.currentSubtitleData.sourceSet instanceof Set &&
-        this.currentSubtitleData.sourceSet.has(normalized)
+        this.currentSubtitleData.sourceSet.has(normalized) &&
+        Date.now() - (this.currentSubtitleData.createdAt || 0) <= CAPTION_PREFETCH_GRACE_MS
       ) {
         return;
       }
@@ -1300,12 +1311,25 @@
       this.fallbackPending.set(key, task);
     }
 
+    setCaptionWaitingVisibility(element, state, hidden) {
+      if (!element || !state) return;
+      if (!state.visibilityCaptured) {
+        state.visibility = element.style.visibility || "";
+        state.visibilityCaptured = true;
+      }
+      element.style.visibility = hidden ? "hidden" : state.visibility || "";
+      state.hiddenPending = !!hidden;
+    }
+
     ensureElementState(element) {
       if (!this.elementState.has(element)) {
         this.elementState.set(element, {
           original: "",
           injected: "",
           whiteSpace: "",
+          visibility: "",
+          visibilityCaptured: false,
+          hiddenPending: false,
           hadLineBreak: false,
         });
       }
@@ -1423,10 +1447,18 @@
         }
       }
       if (!translated) {
+        const hideUntilTranslated =
+          (this.settings?.bilingual?.captions || "off") === "off" && this.containsCjkText(state.original);
         if (this.currentSubtitleData && this.currentVideoCacheKey) {
           this.ensureBackgroundFullPrefetch(this.currentVideoCacheKey, this.currentSubtitleData);
           this.enqueueWindowPrefetch(this.currentVideoCacheKey, this.currentSubtitleData, state.original);
         }
+        if (hideUntilTranslated) {
+          this.queueFallbackCaptionTranslation(state.original, { force: true });
+          this.setCaptionWaitingVisibility(element, state, true);
+          return;
+        }
+        this.setCaptionWaitingVisibility(element, state, false);
         if (this.shouldWaitForPrefetchForLine(state.original)) {
           return;
         }
@@ -1435,6 +1467,7 @@
       }
       const shaped = this.keepLineBreakShape(state.original, translated);
       const output = this.formatCaption(state.original, shaped);
+      this.setCaptionWaitingVisibility(element, state, false);
       if (live !== output) {
         if (!state.whiteSpace) {
           state.whiteSpace = element.style.whiteSpace || "";
