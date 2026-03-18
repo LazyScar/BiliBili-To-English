@@ -354,6 +354,8 @@
         });
         bucket.applied = {};
         bucket.inflight = {};
+        bucket.lastSource = {};
+        bucket.lastLanguage = {};
       });
     }
 
@@ -846,10 +848,27 @@
       return !!state.extraNode && state.extraNode.isConnected && node.nodeValue === state.original;
     }
 
+    isTextModeCurrent(node, state, original, translated, mode) {
+      if (!this.isStateApplied(node, state, mode)) return false;
+      if (state.original !== original || state.translation !== translated) return false;
+      if (mode === "off") {
+        return node.nodeValue === translated;
+      }
+      const expectedExtra = mode === "stacked" ? translated : ` | ${translated}`;
+      return state.extraNode?.textContent === expectedExtra;
+    }
+
     applyTextMode(node, state, original, translated, mode) {
+      if (this.isTextModeCurrent(node, state, original, translated, mode)) {
+        state.inflightSig = "";
+        this.textState.set(node, state);
+        return;
+      }
       if (mode === "off") {
         this.removeBilingualNode(state);
-        node.nodeValue = translated;
+        if (node.nodeValue !== translated) {
+          node.nodeValue = translated;
+        }
         state.injectedValue = translated;
       } else {
         if (node.nodeValue !== original) {
@@ -865,9 +884,14 @@
           }
         }
         if (mode === "stacked") {
-          extraNode.textContent = translated;
+          if (extraNode.textContent !== translated) {
+            extraNode.textContent = translated;
+          }
         } else {
-          extraNode.textContent = ` | ${translated}`;
+          const inlineTranslated = ` | ${translated}`;
+          if (extraNode.textContent !== inlineTranslated) {
+            extraNode.textContent = inlineTranslated;
+          }
         }
         state.extraNode = extraNode;
         state.injectedValue = mode === "stacked" ? `${original}\n${translated}` : `${original} | ${translated}`;
@@ -927,6 +951,15 @@
       if (!source || this.shouldSkipText(source, node.parentElement)) return;
       const language = this.settings.targetLanguage;
 
+      if (
+        state.lastSource === source &&
+        state.lastLanguage === language &&
+        state.lastMode === mode &&
+        this.isStateApplied(node, state, mode)
+      ) {
+        return;
+      }
+
       const quick = this.translationManager.peekCached(source, {
         targetLanguage: language,
         area,
@@ -944,7 +977,7 @@
       }
       if (quick.fromCache && !quick.translation) {
         this.removeBilingualNode(state);
-        if (state.applied && node.isConnected) {
+        if (state.applied && node.isConnected && node.nodeValue !== state.original) {
           node.nodeValue = state.original;
         }
         state.applied = false;
@@ -953,15 +986,6 @@
         state.lastLanguage = language;
         state.lastMode = mode;
         state.inflightSig = "";
-        return;
-      }
-
-      if (
-        state.lastSource === source &&
-        state.lastLanguage === language &&
-        state.lastMode === mode &&
-        this.isStateApplied(node, state, mode)
-      ) {
         return;
       }
 
@@ -990,6 +1014,8 @@
           requestIds: {},
           inflight: {},
           applied: {},
+          lastSource: {},
+          lastLanguage: {},
         });
       }
       return this.attrState.get(element);
@@ -1024,23 +1050,41 @@
         if (!source || this.shouldSkipText(source, element)) return;
         const language = this.settings.targetLanguage;
 
+        if (
+          bucket.applied[attr] &&
+          currentValue === bucket.applied[attr] &&
+          bucket.lastSource[attr] === source &&
+          bucket.lastLanguage[attr] === language
+        ) {
+          bucket.inflight[attr] = "";
+          return;
+        }
+
         const quick = this.translationManager.peekCached(source, {
           targetLanguage: language,
           area,
           titleCase,
         });
         if (quick.translation) {
-          element.setAttribute(attr, quick.translation);
+          if (currentValue !== quick.translation) {
+            element.setAttribute(attr, quick.translation);
+          }
           bucket.applied[attr] = quick.translation;
+          bucket.lastSource[attr] = source;
+          bucket.lastLanguage[attr] = language;
           bucket.inflight[attr] = "";
           return;
         }
         if (quick.fromCache && !quick.translation) {
           bucket.inflight[attr] = "";
           if (bucket.applied[attr]) {
-            element.setAttribute(attr, source);
+            if (currentValue !== source) {
+              element.setAttribute(attr, source);
+            }
             bucket.applied[attr] = "";
           }
+          bucket.lastSource[attr] = source;
+          bucket.lastLanguage[attr] = language;
           return;
         }
 
@@ -1196,7 +1240,7 @@
               }
             } else {
               this.removeBilingualNode(state);
-              if (state.applied && job.node.isConnected) {
+              if (state.applied && job.node.isConnected && job.node.nodeValue !== state.original) {
                 job.node.nodeValue = state.original;
               }
               state.applied = false;
@@ -1222,8 +1266,12 @@
               if (!bucket || bucket.requestIds[job.attr] !== job.requestId) return;
               bucket.inflight[job.attr] = "";
               if (!translated || !job.element.isConnected) return;
-              job.element.setAttribute(job.attr, translated);
+              if (job.element.getAttribute(job.attr) !== translated) {
+                job.element.setAttribute(job.attr, translated);
+              }
               bucket.applied[job.attr] = translated;
+              bucket.lastSource[job.attr] = job.source;
+              bucket.lastLanguage[job.attr] = job.language;
             });
           };
           const map = await this.translateGroupedJobs(group, {
@@ -1240,10 +1288,19 @@
             const bucket = this.attrState.get(job.element);
             if (!bucket || bucket.requestIds[job.attr] !== job.requestId) return;
             bucket.inflight[job.attr] = "";
+            if (!job.element.isConnected) return;
             const translated = map.get(job.source) || null;
-            if (!translated || !job.element.isConnected) return;
-            job.element.setAttribute(job.attr, translated);
+            if (!translated) {
+              bucket.lastSource[job.attr] = job.source;
+              bucket.lastLanguage[job.attr] = job.language;
+              return;
+            }
+            if (job.element.getAttribute(job.attr) !== translated) {
+              job.element.setAttribute(job.attr, translated);
+            }
             bucket.applied[job.attr] = translated;
+            bucket.lastSource[job.attr] = job.source;
+            bucket.lastLanguage[job.attr] = job.language;
           });
         }
       }
