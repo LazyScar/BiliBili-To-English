@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": [
@@ -18,9 +18,7 @@
     "https://api-free.deepl.com/*",
     "https://edge.microsoft.com/*",
     "https://api.cognitive.microsofttranslator.com/*",
-    "https://api.github.com/*",
-    "https://github.com/*",
-    "https://addons.mozilla.org/*"
+    "https://api.github.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -31,6 +29,9 @@
     }
   },
   "background": {
+    "scripts": [
+      "background.js"
+    ],
     "service_worker": "background.js"
   },
   "icons": {
@@ -69,7 +70,12 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "bilibili-translator@bilibili.com",
-      "strict_min_version": "109.0"
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": [
+          "websiteContent"
+        ]
+      }
     }
   }
 }
