@@ -118,6 +118,12 @@ No personal data is collected. However, to perform translations, some text may b
 
 ---
 
+## Contributors
+
+<a href="https://github.com/LazyScar/BiliBili-To-English/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=LazyScar/BiliBili-To-English" />
+</a>
+
 ## Credits
 
 Developed by **[LazyScar](https://github.com/LazyScar)** · Inspired by **[XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)** · Thanks to the open-source contributors and the BiliBili community
