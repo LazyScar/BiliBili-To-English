@@ -103,6 +103,7 @@
       this.singleQueueTimer = null;
       this.singleQueueDelayMs = 16;
       this.maxConcurrentBatches = 3;
+      this._batchDurationSamples = [];
     }
 
     async initialize() {
@@ -159,18 +160,32 @@
     applyBoundarySpacing(text) {
       const s = String(text || "");
       if (!s) return s;
+      // Don't mangle URLs — their paths contain letters+digits that look like
+      // word boundaries but must stay joined (e.g. "inlxJ2lipl5i").
+      if (/https?:\/\//.test(s)) return s;
       // Fast path: no Latin letters, digits, or operator characters present —
       // none of the boundary rules can match, so skip all 7 regex passes.
       // This covers the overwhelming majority of CJK subtitle lines.
       if (!/[A-Za-z0-9+\/|]/.test(s)) return s;
-      return s
+      // Protect BV video IDs (BV + 10 alphanum chars) and common version tokens
+      // from being broken apart — replace with opaque placeholders, restore after.
+      const protected_ = [];
+      let working = s.replace(/\bBV[1-9A-Za-z]{10}\b/g, (m) => {
+        protected_.push(m);
+        return `\x02${protected_.length - 1}\x03`;
+      });
+      working = working
         .replace(/([A-Za-z])(\d)/g, "$1 $2")
         .replace(/(\d)([A-Za-z])/g, "$1 $2")
         .replace(/([\u4e00-\u9fff])(\d)/g, "$1 $2")
         .replace(/(\d)([\u4e00-\u9fff])/g, "$1 $2")
         .replace(/([a-z])([A-Z])/g, "$1 $2")
-        .replace(/([A-Za-z0-9])([+\/|])([A-Za-z0-9])/g, "$1 $2 $3")
+        .replace(/([A-Za-z0-9])([+|])([A-Za-z0-9])/g, "$1 $2 $3")
         .replace(/\s{2,}/g, " ");
+      if (protected_.length) {
+        working = working.replace(/\x02(\d+)\x03/g, (_, i) => protected_[Number(i)]);
+      }
+      return working;
     }
 
     splitMixedAlphaNumericToken(token) {
@@ -200,17 +215,29 @@
     }
 
     splitMixedAlphaNumericRecursively(text) {
-      const tokens = String(text || "").split(/\s+/).filter(Boolean);
-      const out = [];
-      tokens.forEach((token) => {
-        const parts = this.splitMixedAlphaNumericToken(token);
-        if (parts.length > 1) {
-          out.push(...parts);
-        } else {
-          out.push(token);
-        }
-      });
-      return out.join(" ");
+      if (/https?:\/\//.test(text)) return String(text || "");
+      const input = String(text || "");
+      const BV_RE = /^BV[1-9A-Za-z]{10}$/;
+      const processLine = (line) => {
+        const tokens = line.split(/\s+/).filter(Boolean);
+        const out = [];
+        tokens.forEach((token) => {
+          // Never split BV video IDs or placeholder tokens
+          if (BV_RE.test(token) || /^\x02\d+\x03$/.test(token)) {
+            out.push(token);
+            return;
+          }
+          const parts = this.splitMixedAlphaNumericToken(token);
+          if (parts.length > 1) {
+            out.push(...parts);
+          } else {
+            out.push(token);
+          }
+        });
+        return out.join(" ");
+      };
+      if (!input.includes("\n")) return processLine(input);
+      return input.split("\n").map(processLine).join("\n");
     }
 
     preprocessInputText(text) {
@@ -245,7 +272,22 @@
         .replace(/([([{])\s+/g, "$1")
         .replace(/\s+([)\]}])/g, "$1")
         .replace(/\s{2,}/g, " ")
+        // Collapse spaces around apostrophes in contractions: "don ' t" → "don't"
+        .replace(/(\w)\s+['\u2019\u02bc]\s*(\w)/g, "$1'$2")
+        .replace(/(\w)\s*['\u2019\u02bc]\s+(\w)/g, "$1'$2")
+        // Normalize curly/modifier apostrophes to straight apostrophe
+        .replace(/[\u2019\u02bc]/g, "'")
+        // Collapse unit-slash spacing: "768500 / h" → "768500/h", "32 / h" → "32/h"
+        .replace(/(\d)\s+\/\s+([a-zA-Z])/g, "$1/$2")
+        // Remove space before unit letter after slash: "32/ h" → "32/h"
+        .replace(/\/\s+([a-zA-Z])/g, "/$1")
         .trim();
+      // If the source had line breaks but the translation lost them, try to restore them
+      // before circled/enclosed numbers (①②③ etc.) which are common in Chinese lists.
+      if (input && input.includes("\n") && !out.includes("\n")) {
+        const restored = out.replace(/\s+([\u2460-\u2473\u2474-\u2487\u2488-\u249b])/g, "\n$1");
+        if (restored.includes("\n")) out = restored.trimStart();
+      }
       out = this.applyCaseShape(input, out);
       if (options?.titleCase && this.shouldTitleCase(out)) {
         out = this.toTitleCase(out);
@@ -258,10 +300,15 @@
     applyCaseShape(input, output) {
       if (!input || !output) return output;
       const inFirst = input.trim().charAt(0);
-      const outFirst = output.trim().charAt(0);
+      const outTrimmed = output.trim();
+      const outFirst = outTrimmed.charAt(0);
       if (!inFirst || !outFirst) return output;
       if (/[A-Z]/.test(inFirst) && /[a-z]/.test(outFirst)) {
-        return outFirst.toUpperCase() + output.trim().slice(1);
+        return outFirst.toUpperCase() + outTrimmed.slice(1);
+      }
+      // CJK source → always capitalize first letter of English output
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]/.test(inFirst) && /[a-z]/.test(outFirst)) {
+        return outFirst.toUpperCase() + outTrimmed.slice(1);
       }
       return output;
     }
@@ -775,10 +822,12 @@
         let translatedBatch = new Array(batch.length).fill(null);
         let usedEngineBatch = new Array(batch.length).fill(primaryEngine);
         try {
+          const t0 = Date.now();
           const fallbackOutput = await this.translateBatchWithFallback(engineChain, batchTexts, {
             targetLanguage,
             sourceLanguage,
           });
+          this._recordBatchDuration(Date.now() - t0);
           translatedBatch = fallbackOutput.values;
           usedEngineBatch = fallbackOutput.usedEngine;
         } catch (error) {
@@ -808,11 +857,31 @@
       });
       const concurrency = primaryEngine === "deepl" ? 2 : this.maxConcurrentBatches;
       await this.runWithConcurrency(tasks, concurrency);
+      this._adaptConcurrency();
 
       if (waits.length) {
         await Promise.all(waits);
       }
       return results;
+    }
+
+    _recordBatchDuration(ms) {
+      this._batchDurationSamples.push(ms);
+      if (this._batchDurationSamples.length > 10) {
+        this._batchDurationSamples.shift();
+      }
+    }
+
+    _adaptConcurrency() {
+      const samples = this._batchDurationSamples;
+      if (samples.length < 3) return;
+      const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+      // Fast: avg < 400ms → scale up; slow: avg > 1200ms → scale down
+      if (avg < 400 && this.maxConcurrentBatches < 6) {
+        this.maxConcurrentBatches = Math.min(6, this.maxConcurrentBatches + 1);
+      } else if (avg > 1200 && this.maxConcurrentBatches > 1) {
+        this.maxConcurrentBatches = Math.max(1, this.maxConcurrentBatches - 1);
+      }
     }
   }
 
