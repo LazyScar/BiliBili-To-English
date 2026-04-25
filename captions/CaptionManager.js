@@ -2,8 +2,10 @@
   const ROOT = (window.BTE = window.BTE || {});
 
   const CAPTION_SELECTORS = [
+    "[role='caption']",
     ".bpx-player-subtitle-item-text",
     ".bpx-player-subtitle-item-text > span",
+    ".bpx-player-subtitle-item-text span",
     ".bpx-player-subtitle-wrap .bpx-player-subtitle-item",
     ".bpx-player-subtitle-main",
     ".bpx-player-subtitle-main > span",
@@ -13,6 +15,9 @@
     ".bili-subtitle-x-subtitle-panel-text",
     ".bili-subtitle-x-subtitle-panel-text[role='caption']",
     ".bili-subtitle-x-subtitle-panel-major-group [role='caption']",
+    "[class*='subtitle'][class*='panel'][class*='text']",
+    "[class*='subtitle-item-text']",
+    "[class*='subtitle-text']",
     ".bilibili-player-video-subtitle .subtitle-item-text",
     ".bilibili-player-video-subtitle .bilibili-player-video-subtitle-item-text",
     ".bilibili-player-video-subtitle-item-text",
@@ -56,7 +61,7 @@
   const CAPTION_FUTURE_PREFETCH_AHEAD_SECONDS = 600;
   const CAPTION_FUTURE_PREFETCH_MAX_LINES = 260;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
-  const CAPTION_PREFETCH_RETRY_MS = 320;
+  const CAPTION_PREFETCH_RETRY_MS = 150;
   const CAPTION_PREFETCH_GRACE_MS = 450;
   const CAPTION_EXTRA_TRACK_LIMIT = 4;
   const CAPTION_CJK_LAN_PATTERN = /(zh|cmn|yue|cn|chs|cht|sc|tc)/i;
@@ -118,33 +123,44 @@
     }
   }
 
+  function isCdnUrl(url) {
+    // CDN subtitle files are public — no cookies needed.
+    // Sending credentials: "include" to a CDN that responds with Access-Control-Allow-Origin: *
+    // causes a CORS block. Only Bilibili API endpoints need cookies.
+    try {
+      const host = new URL(url).hostname;
+      return host.endsWith(".hdslb.com") || host.endsWith(".bilivideo.com");
+    } catch (_error) {
+      return false;
+    }
+  }
+
   async function fetchJsonOrText(url) {
+    // CDN files: fetch without credentials to avoid CORS wildcard conflict.
+    // API endpoints: fetch with credentials so Bilibili's auth cookies are sent.
+    const credentials = isCdnUrl(url) ? "omit" : "include";
+    try {
+      const response = await fetch(url, { credentials });
+      if (response.ok) {
+        const type = response.headers.get("content-type") || "";
+        const text = await response.text();
+        return parseJsonOrRaw(text, type);
+      }
+    } catch (_error) {
+      // Fall through to background fetch (handles CORS-restricted iframes / workers).
+    }
     try {
       const bg = await runtimeMessage({
         type: "bte:bgFetch",
-        payload: {
-          url,
-          method: "GET",
-          credentials: "include",
-        },
+        payload: { url, method: "GET", credentials: "omit" },
       });
       if (bg && bg.ok) {
         return parseJsonOrRaw(bg.text || "", "application/json");
       }
     } catch (_error) {
-      // Fallback to direct fetch below.
-    }
-    try {
-      const response = await fetch(url, {
-        credentials: "include",
-      });
-      if (!response.ok) return null;
-      const type = response.headers.get("content-type") || "";
-      const text = await response.text();
-      return parseJsonOrRaw(text, type);
-    } catch (_error) {
       return null;
     }
+    return null;
   }
 
   class CaptionManager {
@@ -205,7 +221,9 @@
       }
       this.start();
       this.bindVideoSignals();
-      this.prefetchCurrentVideo(true);
+      // Don't pass forceRefresh — the cache-hit path above handles same-video
+      // updates without blowing away translations already in progress.
+      this.prefetchCurrentVideo(false);
       this.applyToActiveSubtitleNodes();
     }
 
@@ -396,41 +414,55 @@
       const cidFromQuery = Number.parseInt(search.get("cid") || "", 10) || null;
       const bvidFromUrl = (pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || null;
       const epIdFromUrl = Number.parseInt((pathname.match(/\/bangumi\/play\/ep(\d+)/) || [])[1] || "", 10) || null;
-      const pages = Array.isArray(state.videoData?.pages) ? state.videoData.pages : [];
-      const pageMeta = pages[pageNumber - 1] || pages[0] || null;
+
+      // After SPA navigation __INITIAL_STATE__ can still hold the PREVIOUS video's
+      // data. Detect staleness by comparing its bvid against the URL bvid — if they
+      // don't match, treat the state as stale and ignore its bvid/cid.
+      const stateBvid =
+        state.bvid ||
+        state.videoData?.bvid ||
+        state.epInfo?.bvid ||
+        playInfo?.data?.bvid ||
+        null;
+      const stateIsStale = !!(bvidFromUrl && stateBvid && stateBvid !== bvidFromUrl);
+
+      // Always prefer the URL bvid (ground truth); fall back to state only when
+      // the state is fresh (same video) or we have no URL bvid.
+      const bvid = bvidFromUrl || (!stateIsStale ? stateBvid : null) || playerInfo?.bvid || null;
+
       const epList = Array.isArray(state.epList) ? state.epList : [];
       const matchedEp = epIdFromUrl
         ? epList.find((ep) => Number(ep?.id || ep?.ep_id || ep?.epid || 0) === epIdFromUrl) || null
         : null;
-      const bvid =
-        state.bvid ||
-        state.videoData?.bvid ||
-        state.epInfo?.bvid ||
-        matchedEp?.bvid ||
-        playInfo?.data?.bvid ||
-        playerInfo?.bvid ||
-        bvidFromUrl ||
-        null;
-      const aid =
-        state.aid ||
-        state.videoData?.aid ||
-        state.videoData?.stat?.aid ||
-        state.epInfo?.aid ||
-        pageMeta?.aid ||
-        matchedEp?.aid ||
-        playInfo?.data?.aid ||
-        playerInfo?.aid ||
-        null;
-      const cid =
-        state.cid ||
-        state.videoData?.cid ||
-        pageMeta?.cid ||
-        state.epInfo?.cid ||
-        matchedEp?.cid ||
-        playInfo?.data?.cid ||
-        playerInfo?.cid ||
-        cidFromQuery ||
-        null;
+
+      const pages = !stateIsStale && Array.isArray(state.videoData?.pages) ? state.videoData.pages : [];
+      const pageMeta = pages[pageNumber - 1] || pages[0] || null;
+
+      const aid = stateIsStale
+        ? (playerInfo?.aid || null)
+        : (state.aid ||
+           state.videoData?.aid ||
+           state.videoData?.stat?.aid ||
+           state.epInfo?.aid ||
+           pageMeta?.aid ||
+           matchedEp?.aid ||
+           playInfo?.data?.aid ||
+           playerInfo?.aid ||
+           null);
+
+      // Only trust state cid when state bvid matches URL (i.e. state is fresh).
+      const cid = stateIsStale
+        ? (playerInfo?.cid || cidFromQuery || null)
+        : (state.cid ||
+           state.videoData?.cid ||
+           pageMeta?.cid ||
+           state.epInfo?.cid ||
+           matchedEp?.cid ||
+           playInfo?.data?.cid ||
+           playerInfo?.cid ||
+           cidFromQuery ||
+           null);
+
       const context = {
         bvid,
         aid,
@@ -457,16 +489,24 @@
         candidates.push(`https://api.bilibili.com/x/player/pagelist?aid=${encodeURIComponent(context.aid)}`);
         candidates.push(`https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(context.aid)}`);
       }
-      for (const url of candidates) {
-        try {
-          const payload = await fetchJsonOrText(url);
-          const cid = this.extractCidFromVideoMeta(payload, context.pageNumber);
-          if (!cid) continue;
-          context.cid = cid;
-          context.key = this.buildContextKey(context);
-          return context;
-        } catch (_error) {
-          // keep probing
+      if (!candidates.length) return context;
+      // Try up to 3 times with a brief back-off — on SPA navigation the API can
+      // momentarily return stale data before Bilibili's own route handler settles.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        for (const url of candidates) {
+          try {
+            const payload = await fetchJsonOrText(url);
+            const cid = this.extractCidFromVideoMeta(payload, context.pageNumber);
+            if (!cid) continue;
+            context.cid = cid;
+            context.key = this.buildContextKey(context);
+            return context;
+          } catch (_error) {
+            // keep probing
+          }
+        }
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
       return context;
@@ -486,8 +526,19 @@
 
     buildProbeUrls(context) {
       const urls = [];
+      // x/web-interface/view does not require WBI signing and includes data.subtitle.list.
+      // Put it first so the -400 from the WBI-gated player endpoints is never reached.
+      if (context.bvid) {
+        urls.push(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(context.bvid)}`);
+      }
+      if (!context.bvid && context.aid) {
+        urls.push(`https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(context.aid)}`);
+      }
       if (context.cid && context.bvid) {
         urls.push(`https://api.bilibili.com/x/player/v2?cid=${context.cid}&bvid=${context.bvid}`);
+      }
+      if (context.cid && context.aid) {
+        urls.push(`https://api.bilibili.com/x/player/v2?cid=${context.cid}&aid=${context.aid}`);
       }
       if (context.cid) {
         urls.push(`https://api.bilibili.com/x/player/wbi/v2?cid=${context.cid}`);
@@ -517,14 +568,50 @@
       const tracks = [];
       const playInfo = window.__playinfo__ || {};
       const state = window.__INITIAL_STATE__ || {};
-      const p1 = playInfo?.data?.subtitle?.subtitles || [];
-      const p2 = state?.videoData?.subtitle?.list || [];
-      const p3 = state?.videoData?.subtitle?.subtitles || [];
-      [p1, p2, p3].forEach((list) => {
+
+      // After SPA navigation __INITIAL_STATE__ / __playinfo__ can hold the previous
+      // video's subtitle tracks. Guard against this by checking bvid against the URL.
+      const bvidFromUrl = (location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || null;
+      const stateBvid = state.bvid || state.videoData?.bvid || playInfo?.data?.bvid || null;
+      const stateIsStale = !!(bvidFromUrl && stateBvid && stateBvid !== bvidFromUrl);
+      if (stateIsStale) return [];
+
+      const candidates = [
+        playInfo?.data?.subtitle?.subtitles,
+        playInfo?.data?.subtitle?.list,
+        state?.videoData?.subtitle?.list,
+        state?.videoData?.subtitle?.subtitles,
+        state?.epInfo?.subtitle?.list,
+        state?.epInfo?.subtitle?.subtitles,
+      ];
+      candidates.forEach((list) => {
         if (Array.isArray(list)) {
           list.forEach((item) => this.collectTrack(item, tracks));
         }
       });
+      return tracks;
+    }
+
+    getPlayerSubtitleTracks() {
+      const tracks = [];
+      try {
+        const player = window.player;
+        if (!player || typeof player !== "object") return tracks;
+        for (const method of ["getSubtitleList", "getSubtitles", "getSubtitle", "getCurrentSubtitleList"]) {
+          if (typeof player[method] !== "function") continue;
+          const result = player[method]();
+          if (!result) continue;
+          const list = Array.isArray(result)
+            ? result
+            : Array.isArray(result?.list) ? result.list
+            : Array.isArray(result?.subtitles) ? result.subtitles
+            : [];
+          list.forEach((item) => this.collectTrack(item, tracks));
+          if (tracks.length) return tracks;
+        }
+      } catch (_error) {
+        // ignore — player API may not exist
+      }
       return tracks;
     }
 
@@ -577,6 +664,13 @@
     }
 
     async fetchSubtitleTracks(context) {
+      // Try the live player object first — it reflects the current video even
+      // during SPA navigation when __INITIAL_STATE__ may still hold stale data.
+      const playerTracks = this.getPlayerSubtitleTracks();
+      if (playerTracks.length) {
+        return this.rankSubtitleTracks(playerTracks);
+      }
+      // Embedded tracks from page JS globals (stale-guarded inside getEmbeddedTracks).
       const embedded = this.getEmbeddedTracks();
       if (embedded.length) {
         const parsed = this.parseSubtitleTracks({ data: { subtitle: { subtitles: embedded } } });
@@ -977,16 +1071,33 @@
         )
       );
       if (!deduped.length) return;
+      // Build a reverse index: preprocessed text → original deduped line key.
+      // translateMany preprocesses each input before sending to the engine, so onPartial.source
+      // is the preprocessed form. We need to map it back to the original subtitle content key
+      // (what resolveTranslationForLine will look up) to avoid a key mismatch.
+      const preprocessedToOriginal = new Map();
+      if (typeof this.translationManager.preprocessInputText === "function" &&
+          typeof this.translationManager.normalizeText === "function") {
+        deduped.forEach((line) => {
+          const normalized = this.translationManager.normalizeText(line);
+          const prep = normalized ? this.translationManager.preprocessInputText(normalized) : null;
+          if (prep && normalizeLine(prep) !== line) preprocessedToOriginal.set(normalizeLine(prep), line);
+        });
+      }
       let translatedCount = 0;
       if (this.currentVideoCacheKey !== cacheKey) return;
       const translated = await this.translationManager.translateMany(deduped, {
         area: "captions",
         targetLanguage: this.settings.targetLanguage,
+        sourceLanguage: "zh-CN",
+        skipKnownTranslated: false,
         onPartial: ({ source, translation }) => {
           if (!translation || this.currentVideoCacheKey !== cacheKey) return;
           const normalizedSource = normalizeLine(source);
           if (!normalizedSource) return;
-          payload.map.set(normalizedSource, translation);
+          const originalKey = preprocessedToOriginal.get(normalizedSource) || normalizedSource;
+          payload.map.set(originalKey, translation);
+          if (originalKey !== normalizedSource) payload.map.set(normalizedSource, translation);
           translatedCount += 1;
           this.schedulePartialRefresh(cacheKey, payload);
         },
@@ -1003,6 +1114,8 @@
           `translate-empty-${cacheKey}`,
           "Prefetched subtitle lines were sent for translation but no translated output was returned."
         );
+      } else {
+        console.log(`BTE captions: ${translatedCount}/${deduped.length} lines translated, map size: ${payload.map.size}`);
       }
     }
 
@@ -1012,14 +1125,21 @@
       let context = this.extractVideoContext();
       if (!context.cid && !context.bvid && !context.aid) {
         this.warnOnce("missing-video-context", "Video context is missing; subtitle prefetch will retry.");
+        this.lastPrefetchAttempt = Date.now();
         return;
       }
       context = await this.ensureContextCid(context);
       const cacheKey = this.buildVideoCacheKey(context);
       this.lastPrefetchAttempt = Date.now();
 
-      if (!forceRefresh && this.currentVideoCacheKey === cacheKey && this.currentSubtitleData) return;
-      if (!forceRefresh && this.videoCache.has(cacheKey)) {
+      if (this.currentVideoCacheKey === cacheKey && this.currentSubtitleData) {
+        // Same video already active — re-apply in case DOM changed, but don't re-fetch.
+        this.applyToActiveSubtitleNodes();
+        this.ensureBackgroundFullPrefetch(cacheKey, this.currentSubtitleData);
+        this.enqueueWindowPrefetch(cacheKey, this.currentSubtitleData);
+        return;
+      }
+      if (this.videoCache.has(cacheKey)) {
         this.currentVideoCacheKey = cacheKey;
         this.currentSubtitleData = this.videoCache.get(cacheKey);
         if (this.currentSubtitleData && !this.currentSubtitleData.sourceSet) {
@@ -1043,26 +1163,30 @@
         return;
       }
 
+      const taskStartHref = location.href;
       const task = (async () => {
         const tracks = await this.fetchSubtitleTracks(context);
         if (!tracks.length) {
-          this.warnOnce("no-tracks", "Subtitle tracks were not found for the current video.");
+          this.warnOnce("no-tracks", "BTE: Subtitle tracks were not found for the current video.");
           return;
         }
+        console.log("BTE: Found subtitle tracks:", tracks.map((t) => t.lan || t.subtitleUrl));
 
         const primary = await this.fetchPrimaryBody(tracks);
         if (!primary || !primary.body.length) {
-          this.warnOnce("no-track-body", "Subtitle tracks were found but subtitle body download failed.");
+          this.warnOnce("no-track-body", "BTE: Subtitle tracks were found but subtitle body download failed.");
           return;
         }
+        console.log(`BTE: Subtitle body loaded — ${primary.body.length} lines`);
 
         const primaryBody = primary.body;
         const seen = new Set();
         const uniqueLines = this.collectUniqueLinesFromBody(primaryBody, seen);
         if (!uniqueLines.length) {
-          this.warnOnce("empty-subtitle-body", "Subtitle body exists but contains no translatable lines.");
+          this.warnOnce("empty-subtitle-body", "BTE: Subtitle body exists but contains no translatable lines.");
           return;
         }
+        console.log(`BTE: Translating ${uniqueLines.length} unique subtitle lines`);
 
         const map = new Map();
         const timed = this.buildTimedEntries(primaryBody, map);
@@ -1078,9 +1202,10 @@
         if (!this.running || !this.settings?.enabled || !this.settings?.areas?.captions || !this.isVideoRoute()) {
           return;
         }
-        const latestContext = this.extractVideoContext();
-        const latestKey = this.buildVideoCacheKey(latestContext);
-        if (latestKey !== cacheKey) {
+        // Abort if the user navigated away while we were fetching.
+        // Compare URLs rather than cache keys — our stale-state detection may produce
+        // a different key for the same video if __INITIAL_STATE__ updated mid-fetch.
+        if (location.href !== taskStartHref) {
           return;
         }
         this.videoCache.set(cacheKey, payload);
@@ -1260,6 +1385,8 @@
         .translateMany(lines, {
           area: "captions",
           targetLanguage: this.settings?.targetLanguage || "en",
+          sourceLanguage: "zh-CN",
+          skipKnownTranslated: false,
           onPartial: ({ source, translation }) => {
             if (!translation || !this.currentSubtitleData) return;
             const normalizedSource = normalizeLine(source);
@@ -1431,6 +1558,10 @@
       if (!translated) {
         const quick = this.translationManager.peekCached(state.original, {
           area: "captions",
+          sourceLanguage: "zh-CN",
+          targetLanguage: this.settings?.targetLanguage || "en",
+        }) || this.translationManager.peekCached(state.original, {
+          area: "captions",
           targetLanguage: this.settings?.targetLanguage || "en",
         });
         if (quick.translation) {
@@ -1447,22 +1578,29 @@
         }
       }
       if (!translated) {
-        const hideUntilTranslated =
-          (this.settings?.bilingual?.captions || "off") === "off" && this.containsCjkText(state.original);
         if (this.currentSubtitleData && this.currentVideoCacheKey) {
           this.ensureBackgroundFullPrefetch(this.currentVideoCacheKey, this.currentSubtitleData);
           this.enqueueWindowPrefetch(this.currentVideoCacheKey, this.currentSubtitleData, state.original);
         }
-        if (hideUntilTranslated) {
+        if (this.containsCjkText(state.original)) {
           this.queueFallbackCaptionTranslation(state.original, { force: true });
-          this.setCaptionWaitingVisibility(element, state, true);
-          return;
+          // Show loading placeholder so the user knows translation is in progress
+          if (live !== "BTE Translating..." && live !== state.original) {
+            element.textContent = "BTE Translating...";
+            state.injected = "BTE Translating...";
+          } else if (!state.injected || live === state.original) {
+            element.textContent = "BTE Translating...";
+            state.injected = "BTE Translating...";
+          }
+        } else if (!this.shouldWaitForPrefetchForLine(state.original)) {
+          this.queueFallbackCaptionTranslation(state.original);
+          // Restore original text if we previously wrote something else
+          if (state.injected && live === state.injected && state.original && live !== state.original) {
+            element.textContent = state.original;
+            state.injected = state.original;
+          }
         }
         this.setCaptionWaitingVisibility(element, state, false);
-        if (this.shouldWaitForPrefetchForLine(state.original)) {
-          return;
-        }
-        this.queueFallbackCaptionTranslation(state.original);
         return;
       }
       const shaped = this.keepLineBreakShape(state.original, translated);
@@ -1481,6 +1619,7 @@
         } else {
           element.style.whiteSpace = state.whiteSpace;
         }
+        console.log("BTE captions: applied →", output.slice(0, 60));
         element.textContent = output;
       }
       state.injected = output;
@@ -1494,13 +1633,39 @@
 
     getCandidateCaptionNodes() {
       const nodes = new Set();
-      document.querySelectorAll(CAPTION_SELECTORS.join(",")).forEach((node) => {
+      const addIfSafe = (node) => {
         if (!this.isSafeCaptionTextElement(node)) return;
         const text = normalizeLine(this.extractCaptionSourceText(node));
-        if (!text) return;
-        if (text.length > 220) return;
+        if (!text || text.length > 220) return;
         nodes.add(node);
-      });
+      };
+      document.querySelectorAll(CAPTION_SELECTORS.join(",")).forEach(addIfSafe);
+      // Narrow fallback: walk CJK text nodes inside subtitle containers ONLY.
+      // We intentionally do NOT walk #bilibili-player broadly — that picks up
+      // player controls, buttons, menus, tooltips, and other UI text.
+      if (nodes.size === 0) {
+        const subtitleRoot = document.querySelector(
+          ".bpx-player-subtitle-wrap, .bpx-player-subtitle-panel, " +
+          ".bilibili-player-video-subtitle, [class*='subtitle-wrap'], [class*='subtitle-panel']"
+        );
+        if (subtitleRoot) {
+          const walker = document.createTreeWalker(subtitleRoot, NodeFilter.SHOW_TEXT);
+          let textNode;
+          while ((textNode = walker.nextNode())) {
+            const val = String(textNode.nodeValue || "").trim();
+            if (!val || val.length > 220) continue;
+            if (!/[\u4e00-\u9fff]/.test(val)) continue;
+            const parent = textNode.parentElement;
+            if (!parent || parent.childElementCount > 0) continue;
+            // Skip if inside any interactive ancestor (controls, buttons, links, menus)
+            if (parent.closest(CAPTION_INTERACTIVE_ANCESTOR_SELECTOR)) continue;
+            addIfSafe(parent);
+          }
+          if (nodes.size > 0) {
+            console.log("BTE captions: found", nodes.size, "node(s) via fallback walk in", subtitleRoot.className || subtitleRoot.id);
+          }
+        }
+      }
       return Array.from(nodes);
     }
 
