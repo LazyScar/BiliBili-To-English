@@ -66,6 +66,7 @@
     ".video-time",
     ".duration",
     ".reply-time",
+    ".root-reply-time",
     ".sub-time",
     ".bpx-player-ctrl-time",
     ".bpx-player-ctrl-time-current",
@@ -134,10 +135,12 @@
       this.rescanPoll = null;
       this.stylesInjected = false;
       this.maxNodesPerFlush = 140;
+      this._flushDurationSamples = [];
       this.cleanupCounter = 0;
       this.spacingNodes = new Set();
       this.spacingParents = new Set();
       this.iframeOverlays = new Map();
+      this.timestampState = new Map();
       this.creatorLayoutReady = true;
       this.creatorGateTimer = null;
       this.creatorMutationCounter = 0;
@@ -306,6 +309,8 @@
       }
       if (restore) {
         this.restoreOriginals();
+      } else {
+        this.timestampState.clear();
       }
     }
 
@@ -328,6 +333,13 @@
         }
       });
       this.iframeOverlays.clear();
+      this.timestampState.forEach((state, element) => {
+        if (!element || !element.isConnected) return;
+        if (state.original && element.textContent === state.applied) {
+          element.textContent = state.original;
+        }
+      });
+      this.timestampState.clear();
       this.textState.forEach((state, node) => {
         if (!node || !node.isConnected) return;
         if (state.extraNode && state.extraNode.isConnected) {
@@ -371,6 +383,7 @@
         const root = biliComments.shadowRoot || biliComments;
         this.observeRoot(root);
         this.queueNode(root);
+        this.scanTimestamps();
       }, 250);
     }
 
@@ -388,6 +401,7 @@
         if (biliComments) {
           this.queueNode(biliComments.shadowRoot || biliComments);
         }
+        this.scanTimestamps();
       }, intervalMs);
     }
 
@@ -558,15 +572,9 @@
       }
     }
 
-    ensureIFrameAllowTranslator(iframe) {
-      try {
-        const current = String(iframe.getAttribute("allow") || "");
-        if (/translator/i.test(current)) return;
-        const next = current ? `${current}; translator` : "translator";
-        iframe.setAttribute("allow", next);
-      } catch (_error) {
-        // ignore
-      }
+    ensureIFrameAllowTranslator(_iframe) {
+      // 'translator' Permissions Policy is not supported in Chrome and logs
+      // "Unrecognized feature" warnings. Intentional no-op.
     }
 
     removeIframeOverlay(iframe) {
@@ -644,6 +652,20 @@
       }, 0);
     }
 
+    _adaptFlushSize(ms) {
+      this._flushDurationSamples.push(ms);
+      if (this._flushDurationSamples.length > 8) {
+        this._flushDurationSamples.shift();
+      }
+      const avg = this._flushDurationSamples.reduce((a, b) => a + b, 0) / this._flushDurationSamples.length;
+      // Fast PC (flush < 30ms): increase batch; slow PC (flush > 100ms): reduce batch
+      if (avg < 30 && this.maxNodesPerFlush < 300) {
+        this.maxNodesPerFlush = Math.min(300, this.maxNodesPerFlush + 20);
+      } else if (avg > 100 && this.maxNodesPerFlush > 40) {
+        this.maxNodesPerFlush = Math.max(40, this.maxNodesPerFlush - 20);
+      }
+    }
+
     async flush() {
       if (!this.canRun()) return;
       if (this.flushInProgress) {
@@ -651,6 +673,7 @@
         return;
       }
       this.flushInProgress = true;
+      const t0 = Date.now();
       try {
         const nodes = Array.from(this.pendingNodes);
         this.pendingNodes.clear();
@@ -668,6 +691,7 @@
         }
       } finally {
         this.flushInProgress = false;
+        this._adaptFlushSize(Date.now() - t0);
       }
       if (this.pendingNodes.size || this.textJobs.length || this.attrJobs.length) {
         this.scheduleFlush();
@@ -824,6 +848,7 @@
       const normalized = String(text || "").trim();
       if (!normalized) return true;
       if (this.isTimeLikeText(normalized)) return true;
+      if (/^https?:\/\/\S+$/.test(normalized)) return true;
       if (/^[\p{P}\p{S}\s]+$/u.test(normalized)) return true;
       if (parent && this.isTimeContainer(parent)) return true;
       if (this.isStrictCreatorMode()) {
@@ -866,10 +891,19 @@
       }
       if (mode === "off") {
         this.removeBilingualNode(state);
-        if (node.nodeValue !== translated) {
-          node.nodeValue = translated;
+        // Preserve (or inject) surrounding whitespace so adjacent inline elements
+        // — links, @-mentions, buttons inside comment text — stay word-separated.
+        const origVal = state.original || "";
+        let leadWs = origVal.match(/^(\s+)/)?.[1] ?? "";
+        let trailWs = origVal.match(/(\s+)$/)?.[1] ?? "";
+        // When the original CJK had no spaces (common), add one at element boundaries.
+        if (!leadWs && node.previousSibling?.nodeType === Node.ELEMENT_NODE) leadWs = " ";
+        if (!trailWs && node.nextSibling?.nodeType === Node.ELEMENT_NODE) trailWs = " ";
+        const withWs = leadWs + translated + trailWs;
+        if (node.nodeValue !== withWs) {
+          node.nodeValue = withWs;
         }
-        state.injectedValue = translated;
+        state.injectedValue = withWs;
       } else {
         if (node.nodeValue !== original) {
           node.nodeValue = original;
@@ -1109,6 +1143,131 @@
       if (!element) return false;
       const attr = `${element.className || ""} ${element.getAttribute?.("data-type") || ""} ${element.getAttribute?.("role") || ""}`;
       return /(tag|tags|topic|category|chip|label|keyword|badge)/i.test(attr);
+    }
+
+    formatRelativeTime(text) {
+      const s = String(text || "").trim();
+      let date;
+      const full = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+      if (full) {
+        date = new Date(
+          Number(full[1]), Number(full[2]) - 1, Number(full[3]),
+          Number(full[4] || 0), Number(full[5] || 0), Number(full[6] || 0)
+        );
+      } else {
+        // MM-DD with no year → assume current year (e.g. "04-05")
+        const short = s.match(/^(\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+        if (!short) return null;
+        date = new Date(
+          new Date().getFullYear(),
+          Number(short[1]) - 1, Number(short[2]),
+          Number(short[3] || 0), Number(short[4] || 0), Number(short[5] || 0)
+        );
+      }
+      if (isNaN(date.getTime())) return null;
+      const diffMs = Date.now() - date.getTime();
+      if (diffMs < 0) return null;
+      const diffMinutes = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      if (diffDays >= 30) return null;
+      if (diffMinutes < 1) return "just now";
+      if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? "s" : ""} ago`;
+      if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
+      return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+    }
+
+    processTimestampElement(element) {
+      if (!element || !element.isConnected) return;
+      const text = String(element.textContent || "").trim();
+      if (!text) return;
+      if (!this.timestampState.has(element)) {
+        this.timestampState.set(element, { original: text, applied: "" });
+      }
+      const state = this.timestampState.get(element);
+      // If the element shows our previously applied label (e.g. "21 hours ago"),
+      // compute relative time from the saved original date string, not the applied
+      // text — otherwise formatRelativeTime returns null and we never update it.
+      const sourceText = (state.applied && text === state.applied) ? state.original : text;
+      if (sourceText !== state.applied) {
+        state.original = sourceText;
+      }
+      const relative = this.formatRelativeTime(sourceText);
+      if (relative === null) return;
+      if (state.applied === relative && text === state.applied) return;
+      element.textContent = relative;
+      state.applied = relative;
+    }
+
+    scanShadowRootTimestamps(root, depth) {
+      if (!root || (depth || 0) > 5) return;
+      // Selector-based scan (catches known class names)
+      try {
+        root.querySelectorAll(TIME_CONTAINER_SELECTOR).forEach((el) => {
+          this.processTimestampElement(el);
+        });
+      } catch (_error) {}
+      // Text-based fallback: walk all text nodes, process leaf parents whose content
+      // looks like a date/time. This handles unknown class names in shadow DOM.
+      try {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let textNode;
+        while ((textNode = walker.nextNode())) {
+          const text = String(textNode.nodeValue || "").trim();
+          if (text.length < 5 || text.length > 30) continue;
+          if (this.formatRelativeTime(text) === null) continue;
+          const parent = textNode.parentElement;
+          if (parent && parent.childElementCount === 0) {
+            this.processTimestampElement(parent);
+          }
+        }
+      } catch (_error) {}
+      // Recurse into nested shadow roots (e.g. bili-comment-renderer)
+      try {
+        root.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot) this.scanShadowRootTimestamps(el.shadowRoot, (depth || 0) + 1);
+        });
+      } catch (_error) {}
+    }
+
+    scanTimestamps() {
+      if (!this.canRun()) return;
+      // Re-process elements we've already applied to (handles "21h ago" → "22h ago" updates).
+      try {
+        this.timestampState.forEach((_state, el) => {
+          if (el && el.isConnected) this.processTimestampElement(el);
+        });
+      } catch (_error) {}
+      // Regular document: selector-based scan
+      try {
+        document.querySelectorAll(TIME_CONTAINER_SELECTOR).forEach((el) => {
+          this.processTimestampElement(el);
+        });
+      } catch (_error) {}
+      // Text-based fallback: catch date strings (e.g. "04-10", "03-31 15:21",
+      // "2026-04-21 01:30:00") that appear in elements not in our selector list.
+      try {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let textNode;
+        while ((textNode = walker.nextNode())) {
+          const text = String(textNode.nodeValue || "").trim();
+          if (text.length < 4 || text.length > 30) continue;
+          if (this.formatRelativeTime(text) === null) continue;
+          const parent = textNode.parentElement;
+          if (!parent || parent.childElementCount > 0) continue;
+          this.processTimestampElement(parent);
+        }
+      } catch (_error) {}
+      // bili-comments shadow DOM: full scan including text-based fallback.
+      // Try multiple locations since Bilibili occasionally moves the component.
+      try {
+        const biliComments =
+          document.getElementById("commentapp")?.querySelector("bili-comments") ||
+          document.querySelector("bili-comments");
+        if (biliComments?.shadowRoot) {
+          this.scanShadowRootTimestamps(biliComments.shadowRoot);
+        }
+      } catch (_error) {}
     }
 
     getPriorityBucket(element) {
