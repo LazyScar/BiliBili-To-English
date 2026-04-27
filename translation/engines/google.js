@@ -110,35 +110,62 @@
       return results;
     }
 
+    parseGoogleResponse(data, originalText) {
+      const chunks = Array.isArray(data?.[0]) ? data[0] : [];
+      let merged = "";
+      chunks.forEach((chunk) => {
+        if (Array.isArray(chunk) && typeof chunk[0] === "string") {
+          merged += chunk[0];
+        }
+      });
+      const normalized = merged.trim();
+      return normalized && normalized !== originalText.trim() ? normalized : null;
+    }
+
     async translateSingle(text, sourceLanguage, targetLanguage) {
+      const url =
+        "https://translate.googleapis.com/translate_a/single?client=gtx" +
+        `&sl=${encodeURIComponent(sourceLanguage || "auto")}` +
+        `&tl=${encodeURIComponent(targetLanguage)}` +
+        "&dt=t" +
+        `&q=${encodeURIComponent(text)}`;
+
+      // Direct fetch — works in most extension contexts.
       try {
-        const url =
-          "https://translate.googleapis.com/translate_a/single?client=gtx" +
-          `&sl=${encodeURIComponent(sourceLanguage || "auto")}` +
-          `&tl=${encodeURIComponent(targetLanguage)}` +
-          "&dt=t" +
-          `&q=${encodeURIComponent(text)}`;
         const response = await fetch(url);
-        if (!response.ok) {
-          return null;
+        if (response.ok) {
+          const data = await response.json();
+          return this.parseGoogleResponse(data, text);
         }
-        const data = await response.json();
-        const chunks = Array.isArray(data?.[0]) ? data[0] : [];
-        let merged = "";
-        chunks.forEach((chunk) => {
-          if (Array.isArray(chunk) && typeof chunk[0] === "string") {
-            merged += chunk[0];
+      } catch (_directError) {
+        // Fall through to background-script fetch.
+      }
+
+      // Background-script fetch — bypasses CORS restrictions in restricted contexts
+      // (iframes, workers) where direct fetch to translate.googleapis.com is blocked.
+      try {
+        const bg = await new Promise((resolve, reject) => {
+          if (!chrome?.runtime?.sendMessage) {
+            reject(new Error("runtime unavailable"));
+            return;
           }
+          chrome.runtime.sendMessage(
+            { type: "bte:bgFetch", payload: { url, method: "GET", credentials: "omit" } },
+            (response) => {
+              const err = chrome.runtime.lastError;
+              if (err) { reject(new Error(err.message || "runtime error")); return; }
+              resolve(response);
+            }
+          );
         });
-        const normalized = merged.trim();
-        if (!normalized || normalized === text.trim()) {
-          return null;
+        if (bg?.ok && bg.text) {
+          const data = JSON.parse(bg.text);
+          return this.parseGoogleResponse(data, text);
         }
-        return normalized;
       } catch (error) {
         console.warn("BTE Google translate failed:", error);
-        return null;
       }
+      return null;
     }
   }
 
