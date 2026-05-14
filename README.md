@@ -15,19 +15,18 @@ Translate and enjoy BiliBili in English or other languages — in real time, dir
 
 ## Overview
 
-**BiliBili To English** is a browser extension designed to translate **BiliBili’s interface, videos, and captions** into English or multiple other languages.  
-It supports **Chrome, Firefox, Brave, Opera, Edge**, and other Chromium/FireFox-based browsers.
-
-This extension enables users to enjoy BiliBili content seamlessly in their preferred language translating UI elements, comments, and video information **instantly**, without opening new tabs or refreshing the page.
+Translate BiliBili to English (or other languages) right in your browser. Works on **Chrome**, **Firefox**, **Brave**, **Opera**, **Edge**, and similar browsers.
+Covers the interface, comments, video titles, and subtitles. Everything translates instantly without any extra steps - just install and go.
 
 ---
 
-## Install
-
-### Firefox
-<p align="left">
+<p align="middle">
   <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
     <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
+  </a>
+
+  <a href="https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab">
+    <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/chrome-web-store.png" height="60">
   </a>
 </p>
 
