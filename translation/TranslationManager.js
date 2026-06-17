@@ -95,6 +95,7 @@
       this.memoryCache = new LruCache(2000);
       this.persistentCache = new Map();
       this.pending = new Map();
+      this.pendingDeferreds = new Set();
       this.knownOutputs = new Map();
       this.persistTimer = null;
       this.ready = false;
@@ -104,6 +105,26 @@
       this.singleQueueDelayMs = 16;
       this.maxConcurrentBatches = 3;
       this._batchDurationSamples = [];
+      this.statusListener = null;
+      this.lastStatusOk = true;
+    }
+
+    setStatusListener(fn) {
+      this.statusListener = typeof fn === "function" ? fn : null;
+    }
+
+    // Surfaces translation health to the page (e.g. an on-screen "unavailable" badge).
+    // ok=true after any successful translation; ok=false when a network/engine call
+    // actually threw for a batch that produced nothing.
+    notifyStatus(ok) {
+      this.lastStatusOk = ok;
+      if (this.statusListener) {
+        try {
+          this.statusListener(ok ? "ok" : "error");
+        } catch (_error) {
+          /* a broken listener must never break translation */
+        }
+      }
     }
 
     async initialize() {
@@ -120,6 +141,23 @@
         this.prunePersistentCache();
       });
       this.ready = true;
+      this.warmUpEngines();
+    }
+
+    // Pre-fetch the Microsoft Edge auth token in the background so the first translation
+    // isn't delayed by it (Microsoft is the default engine). Fire-and-forget; harmless if
+    // it fails — the real translate call will fetch the token normally.
+    warmUpEngines() {
+      try {
+        if (!this.settings || !this.settings.enabled) return;
+        const engine = this.resolveEngine(this.settings, null);
+        const microsoft = this.engines.microsoft;
+        if (engine === "microsoft" && microsoft && typeof microsoft.ensureToken === "function") {
+          Promise.resolve(microsoft.ensureToken()).catch(() => {});
+        }
+      } catch (_error) {
+        /* never let warm-up break initialization */
+      }
     }
 
     destroy() {
@@ -135,6 +173,7 @@
         clearTimeout(this.singleQueueTimer);
         this.singleQueueTimer = null;
       }
+      this.settlePendingWork();
     }
 
     normalizeWhitespacePreservingLines(text) {
@@ -350,11 +389,16 @@
       };
 
       add(selected);
-      if (selected !== "deepl" || deeplFallbackEnabled) {
+      if (selected === "deepl") {
+        // DeepL falls back to Microsoft first (free, reliable), then Google.
+        if (deeplFallbackEnabled) {
+          add("microsoft");
+          add("google");
+        }
+      } else {
+        // A free engine is primary: try the other free engine, then DeepL if keyed.
         add(selected === "google" ? "microsoft" : "google");
         add("microsoft");
-      }
-      if (selected !== "deepl" || deeplFallbackEnabled) {
         add("deepl");
       }
       return chain;
@@ -365,8 +409,9 @@
       if (chain.length) return chain[0];
       const deeplKey = settings.deepl && settings.deepl.apiKey ? settings.deepl.apiKey.trim() : "";
       if (deeplKey) return "deepl";
-      if (settings.deepl && settings.deepl.fallbackToGoogle !== false && this.engines.google) {
-        return "google";
+      if (settings.deepl && settings.deepl.fallbackToGoogle !== false) {
+        if (this.engines.microsoft) return "microsoft";
+        if (this.engines.google) return "google";
       }
       return null;
     }
@@ -505,12 +550,37 @@
       this.prunePersistentCache();
     }
 
+    settlePendingWork() {
+      // Settle every outstanding promise BEFORE the maps are torn down so callers
+      // waiting on a translation are never left hanging. Queued single-translate
+      // items haven't started yet, so resolve them with an empty (cancelled) result;
+      // in-flight batch deferreds resolve with null (the batch's onPartial/storeCache
+      // may still complete later — a second resolve on a settled promise is a no-op).
+      const droppedQueue = this.singleQueue.splice(0);
+      droppedQueue.forEach((item) => {
+        try {
+          item.resolve(this.buildResult(null, null, false));
+        } catch (_error) {
+          /* never let one bad callback strand the rest */
+        }
+      });
+      const droppedDeferreds = Array.from(this.pendingDeferreds);
+      this.pendingDeferreds.clear();
+      droppedDeferreds.forEach((deferred) => {
+        try {
+          deferred.resolve(null);
+        } catch (_error) {
+          /* already settled or rejected — ignore */
+        }
+      });
+    }
+
     async clearAllCaches() {
+      this.settlePendingWork();
       this.memoryCache.clear();
       this.persistentCache.clear();
       this.pending.clear();
       this.knownOutputs.clear();
-      this.singleQueue = [];
       if (this.persistTimer) {
         clearTimeout(this.persistTimer);
         this.persistTimer = null;
@@ -572,6 +642,7 @@
       const values = new Array(batchTexts.length).fill(null);
       const usedEngine = new Array(batchTexts.length).fill(null);
       let unresolved = batchTexts.map((_text, index) => index);
+      let threw = false;
       for (const engineName of engineChain) {
         if (!unresolved.length) break;
         const subsetTexts = unresolved.map((idx) => batchTexts[idx]);
@@ -579,6 +650,7 @@
         try {
           subsetOut = await this.callEngine(engineName, subsetTexts, options);
         } catch (error) {
+          threw = true;
           console.warn(`BTE engine ${engineName} failed:`, error);
         }
         const nextUnresolved = [];
@@ -593,7 +665,7 @@
         });
         unresolved = nextUnresolved;
       }
-      return { values, usedEngine };
+      return { values, usedEngine, threw };
     }
 
     async runWithConcurrency(tasks, concurrency) {
@@ -802,7 +874,11 @@
       const deferredByKey = new Map();
       newItems.forEach((item) => {
         const deferred = createDeferred();
-        const wrapped = deferred.promise.finally(() => this.pending.delete(item.key));
+        this.pendingDeferreds.add(deferred);
+        const wrapped = deferred.promise.finally(() => {
+          this.pending.delete(item.key);
+          this.pendingDeferreds.delete(deferred);
+        });
         this.pending.set(item.key, wrapped);
         deferredByKey.set(item.key, deferred);
         item.indexes.forEach((index) => {
@@ -821,6 +897,7 @@
         const batchTexts = batch.map((item) => item.text);
         let translatedBatch = new Array(batch.length).fill(null);
         let usedEngineBatch = new Array(batch.length).fill(primaryEngine);
+        let batchThrew = false;
         try {
           const t0 = Date.now();
           const fallbackOutput = await this.translateBatchWithFallback(engineChain, batchTexts, {
@@ -830,14 +907,27 @@
           this._recordBatchDuration(Date.now() - t0);
           translatedBatch = fallbackOutput.values;
           usedEngineBatch = fallbackOutput.usedEngine;
+          batchThrew = fallbackOutput.threw;
         } catch (error) {
+          batchThrew = true;
           console.warn("BTE translation batch failed:", error);
+        }
+        // Report health: any success clears the page indicator; an all-empty batch that
+        // actually hit a network/engine error raises it. We never flag all-empty batches
+        // that didn't throw — those are usually legitimately-untranslatable text.
+        if (translatedBatch.some(Boolean)) {
+          this.notifyStatus(true);
+        } else if (batchThrew) {
+          this.notifyStatus(false);
         }
         batch.forEach((item, index) => {
           const normalized = this.postprocessTranslationText(translatedBatch[index], item.text, options);
           if (normalized) {
             this.storeCache(item.key, normalized);
-          } else {
+          } else if (!batchThrew) {
+            // Only negative-cache a genuine "no translation" (engine responded, text
+            // unchanged). When the batch threw (network/engine failure) we skip caching
+            // so the line retries instead of staying blank for the negative-cache TTL.
             this.storeNegativeCache(item.key);
           }
           const usedEngine = usedEngineBatch[index];

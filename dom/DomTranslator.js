@@ -83,6 +83,8 @@
     /^\s*\d{1,2}[-/.]\d{1,2}([-.\/]\d{2,4})?(\s+\d{1,2}:\d{2}(:\d{2})?)?\s*$/,
   ];
 
+  const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
   // Pre-joined selector strings — avoids rebuilding on every node visit
   const TIME_CONTAINER_SELECTOR = TIME_CONTAINER_SELECTORS.join(",");
   const AREA_COMBINED_SELECTORS = {
@@ -92,6 +94,10 @@
     captions: AREA_SELECTORS.captions.join(","),
   };
   const STRICT_ALLOWED_TAGS = new Set(["SPAN", "P", "A", "BUTTON", "LABEL", "H1", "H2", "H3", "LI", "DT", "DD"]);
+  // Inline wrappers Bilibili uses to split one comment/line into many adjacent segments.
+  // We climb through these to find the block container that holds the segments so spacing
+  // can be enforced between them after translation.
+  const INLINE_WRAP_TAGS = new Set(["SPAN", "A", "B", "I", "EM", "STRONG", "MARK", "FONT", "SMALL", "SUB", "SUP", "U", "BDI", "LABEL"]);
 
   function isFormControl(el) {
     if (!el || !el.tagName) return false;
@@ -141,6 +147,7 @@
       this.spacingParents = new Set();
       this.iframeOverlays = new Map();
       this.timestampState = new Map();
+      this.lastTimestampDiscovery = 0;
       this.creatorLayoutReady = true;
       this.creatorGateTimer = null;
       this.creatorMutationCounter = 0;
@@ -1004,9 +1011,7 @@
         state.lastSource = source;
         state.lastLanguage = language;
         state.lastMode = mode;
-        if (node.parentElement) {
-          this.spacingParents.add(node.parentElement);
-        }
+        this.recordSpacingParent(node);
         return;
       }
       if (quick.fromCache && !quick.translation) {
@@ -1170,7 +1175,12 @@
       const diffMinutes = Math.floor(diffMs / 60000);
       const diffHours = Math.floor(diffMs / 3600000);
       const diffDays = Math.floor(diffMs / 86400000);
-      if (diffDays >= 30) return null;
+      // Older than ~a month: don't leave the raw "2026-03-27 04:59" on screen — show a
+      // clean English date. Keep the year only when the source actually had one.
+      if (diffDays >= 30) {
+        const label = `${MONTH_ABBR[date.getMonth()]} ${date.getDate()}`;
+        return full ? `${label}, ${date.getFullYear()}` : label;
+      }
       if (diffMinutes < 1) return "just now";
       if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? "s" : ""} ago`;
       if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
@@ -1233,11 +1243,18 @@
     scanTimestamps() {
       if (!this.canRun()) return;
       // Re-process elements we've already applied to (handles "21h ago" → "22h ago" updates).
+      // Cheap — only iterates the elements we already track — so it runs every tick.
       try {
         this.timestampState.forEach((_state, el) => {
           if (el && el.isConnected) this.processTimestampElement(el);
         });
       } catch (_error) {}
+      // Discovery of NEW timestamp elements walks the whole document (+ shadow DOM) for
+      // text nodes, which is expensive. The comment poll calls this every 250 ms, so
+      // throttle the full scan to ~1 s; the cheap refresh above keeps applied labels live.
+      const now = Date.now();
+      if (now - this.lastTimestampDiscovery < 1000) return;
+      this.lastTimestampDiscovery = now;
       // Regular document: selector-based scan
       try {
         document.querySelectorAll(TIME_CONTAINER_SELECTOR).forEach((el) => {
@@ -1348,6 +1365,7 @@
       const textJobs = this.textJobs.splice(0, this.textJobs.length);
       const attrJobs = this.attrJobs.splice(0, this.attrJobs.length);
 
+      try {
       if (textJobs.length) {
         const textGroups = this.groupJobsByAreaLanguage(textJobs);
         for (const group of textGroups) {
@@ -1368,9 +1386,7 @@
                 state.lastSource = job.source;
                 state.lastLanguage = job.language;
                 state.lastMode = job.mode;
-                if (job.node.parentElement) {
-                  this.spacingParents.add(job.node.parentElement);
-                }
+                this.recordSpacingParent(job.node);
               }
             });
           };
@@ -1394,9 +1410,7 @@
               state.lastSource = job.source;
               state.lastLanguage = job.language;
               state.lastMode = job.mode;
-              if (job.node.parentElement) {
-                this.spacingParents.add(job.node.parentElement);
-              }
+              this.recordSpacingParent(job.node);
             } else {
               this.removeBilingualNode(state);
               if (state.applied && job.node.isConnected && job.node.nodeValue !== state.original) {
@@ -1464,10 +1478,39 @@
         }
       }
       this.flushSiblingSpacing();
+      } finally {
+        // Defensive: if canRun() flipped false mid-flush we return early, leaving some
+        // jobs' inflight markers set — which would skip those nodes forever. Clear any
+        // still-set markers so they re-queue next pass. No-op on the normal path.
+        textJobs.forEach((job) => {
+          const state = this.textState.get(job.node);
+          if (state && state.requestId === job.requestId && state.inflightSig) {
+            state.inflightSig = "";
+          }
+        });
+        attrJobs.forEach((job) => {
+          const bucket = this.attrState.get(job.element);
+          if (bucket && bucket.requestIds[job.attr] === job.requestId && bucket.inflight[job.attr]) {
+            bucket.inflight[job.attr] = "";
+          }
+        });
+      }
     }
 
     isInlineJoinChar(char) {
       return /[A-Za-z0-9+#]/.test(char || "");
+    }
+
+    // Bilibili renders @-mentions (and topic #tags) as separate clickable elements with
+    // no surrounding whitespace, so after translation they sit flush against the text.
+    // Detect them so we can insert a separating space for readability.
+    isMentionNode(node) {
+      if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+      const text = (node.textContent || "").trim();
+      if (!text) return false;
+      if (text.startsWith("@") || text.startsWith("#")) return true;
+      const cls = `${node.className || ""}`;
+      return /jump-link|user-name|at-user|reply-at|topic|account/i.test(cls);
     }
 
     getHeadChar(node) {
@@ -1501,9 +1544,34 @@
       const head = this.getHeadChar(rightNode);
       if (!tail || !head) return false;
       if (/\s/.test(tail) || /\s/.test(head)) return false;
+      // Always separate an @-mention / #-topic chip from its neighbour (it's a distinct
+      // clickable node), except when the neighbouring char is punctuation that should hug.
+      if (this.isMentionNode(leftNode) || this.isMentionNode(rightNode)) {
+        if (/[)\]}>,.!?;:\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a]/.test(head)) return false;
+        if (/[([{<\uff08]/.test(tail)) return false;
+        return true;
+      }
       if (!this.isInlineJoinChar(tail) && !this.isInlineJoinChar(head)) return false;
       if (/[\u4e00-\u9fff]/.test(tail) && /[\u4e00-\u9fff]/.test(head)) return false;
       return true;
+    }
+
+    // Record containers whose direct children may need a separating space after
+    // translation. We add the text node's parent, then climb through inline wrappers
+    // (span/a/b/…) to also reach the block container that holds sibling segments —
+    // Bilibili splits one comment into many adjacent inline elements, and without this
+    // their translated text runs together (e.g. "…Live Classes]Many students" or
+    // "What I heard beforeOld HeI attended…"). We stop at the first block-level element
+    // so we never space unrelated layout siblings.
+    recordSpacingParent(node) {
+      let el = node && node.parentElement;
+      let depth = 0;
+      while (el && depth < 4) {
+        this.spacingParents.add(el);
+        if (!INLINE_WRAP_TAGS.has(el.tagName)) break;
+        el = el.parentElement;
+        depth += 1;
+      }
     }
 
     injectSpaceBetween(leftNode, rightNode) {

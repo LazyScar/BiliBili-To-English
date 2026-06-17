@@ -8,13 +8,30 @@
   class GoogleEngine {
     constructor() {
       this.name = "google";
+      this.baseIntervalMs = 130;
       this.minIntervalMs = 130;
+      this.maxIntervalMs = 2500;
+      this.consecutiveFailures = 0;
       this.maxCharsPerRequest = 3500;
       this.maxItemsPerRequest = 40;
       this.separator = "\n<<<BTE_SPLIT_TOKEN>>>\n";
       this.fallbackConcurrency = 6;
       this.lastRequestAt = 0;
       this.chain = Promise.resolve();
+    }
+
+    // The free gtx endpoint rate-limits aggressively (HTTP 429). Hammering it on every
+    // failure just deepens the throttle and yields empty/garbled output. Back off
+    // exponentially on 429/5xx and recover immediately on the first success.
+    noteRateLimited() {
+      this.consecutiveFailures = Math.min(this.consecutiveFailures + 1, 5);
+      this.minIntervalMs = Math.min(this.maxIntervalMs, this.baseIntervalMs * 2 ** this.consecutiveFailures);
+    }
+
+    noteSuccess() {
+      if (this.consecutiveFailures === 0) return;
+      this.consecutiveFailures = 0;
+      this.minIntervalMs = this.baseIntervalMs;
     }
 
     schedule(task) {
@@ -135,7 +152,11 @@
         const response = await fetch(url);
         if (response.ok) {
           const data = await response.json();
+          this.noteSuccess();
           return this.parseGoogleResponse(data, text);
+        }
+        if (response.status === 429 || response.status >= 500) {
+          this.noteRateLimited();
         }
       } catch (_directError) {
         // Fall through to background-script fetch.
@@ -160,7 +181,11 @@
         });
         if (bg?.ok && bg.text) {
           const data = JSON.parse(bg.text);
+          this.noteSuccess();
           return this.parseGoogleResponse(data, text);
+        }
+        if (bg && (bg.status === 429 || bg.status >= 500)) {
+          this.noteRateLimited();
         }
       } catch (error) {
         console.warn("BTE Google translate failed:", error);

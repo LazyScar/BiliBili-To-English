@@ -65,7 +65,15 @@ class LanguageManager {
         const lower = text.toLowerCase();
         if (this.dictionary[lower]) return this.dictionary[lower];
         const normalized = lower.replace(/\s+/g, ' ').trim();
-        return this.dictionary[normalized] || null;
+        if (this.dictionary[normalized]) return this.dictionary[normalized];
+        // Final fallback: ignore surrounding punctuation/whitespace so a single manual
+        // dictionary entry (e.g. "返回") also matches "返回。", " 返回 ", "返回!", etc.
+        // — this is the common case for short button/label overrides.
+        const stripped = text.replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, '');
+        if (stripped && stripped !== text) {
+            return this.dictionary[stripped] || this.dictionary[stripped.toLowerCase()] || null;
+        }
+        return null;
     }
 
     async initialize() {

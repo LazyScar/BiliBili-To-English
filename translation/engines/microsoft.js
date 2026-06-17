@@ -249,7 +249,9 @@
         } else {
           console.warn("BTE Microsoft engine failed:", error);
         }
-        return new Array(safeTexts.length).fill(null);
+        // Throw on hard failure so the caller can fall back AND avoid negative-caching
+        // a line that simply failed to fetch (vs. one that is genuinely untranslatable).
+        throw error;
       }
     }
   }

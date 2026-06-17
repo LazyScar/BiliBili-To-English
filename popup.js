@@ -15,16 +15,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const els = {
     appVersion: document.getElementById("appVersion"),
-    enabledToggle: document.getElementById("enabledToggle"),
-    statusDot: document.getElementById("statusDot"),
-    statusText: document.getElementById("statusText"),
+    enableBtn: document.getElementById("enableBtn"),
+    enableLabel: document.getElementById("enableLabel"),
+    bilingualBtn: document.getElementById("bilingualBtn"),
     languageSelect: document.getElementById("languageSelect"),
     engineSelect: document.getElementById("engineSelect"),
-    deeplSection: document.getElementById("deeplSection"),
+    engineIcon: document.getElementById("engineIcon"),
+    deeplMenuRow: document.getElementById("deeplMenuRow"),
     deeplKey: document.getElementById("deeplKey"),
     deeplEndpoint: document.getElementById("deeplEndpoint"),
     deeplFallback: document.getElementById("deeplFallback"),
-    microsoftSection: document.getElementById("microsoftSection"),
+    deeplOptimize: document.getElementById("deeplOptimize"),
     bilingualPage: document.getElementById("bilingualPage"),
     bilingualComments: document.getElementById("bilingualComments"),
     bilingualDynamic: document.getElementById("bilingualDynamic"),
@@ -44,10 +45,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     githubBtn: document.getElementById("githubBtn"),
     docsBtn: document.getElementById("docsBtn"),
     updateBtn: document.getElementById("updateBtn"),
+    updateBadge: document.getElementById("updateBadge"),
   };
 
   const localVersion = chrome?.runtime?.getManifest?.().version || "0.0.0";
   els.appVersion.textContent = `v${localVersion}`;
+
+  const BILINGUAL_AREAS = ["page", "comments", "dynamic", "danmaku", "captions"];
+  const ENGINE_ICONS = {
+    // Real Google "G" mark
+    google:
+      '<svg viewBox="0 0 48 48" width="16" height="16"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg>',
+    // Real Microsoft four-square logo
+    microsoft:
+      '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="2" y="2" width="9" height="9" fill="#F25022"/><rect x="13" y="2" width="9" height="9" fill="#7FBA00"/><rect x="2" y="13" width="9" height="9" fill="#00A4EF"/><rect x="13" y="13" width="9" height="9" fill="#FFB900"/></svg>',
+    // DeepL navy rounded mark
+    deepl:
+      '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#0f2b46"/><text x="12" y="17" font-size="13" fill="#fff" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700">D</text></svg>',
+  };
+  function setEngineIcon(engine) {
+    if (!els.engineIcon) return;
+    els.engineIcon.innerHTML = ENGINE_ICONS[engine] || ENGINE_ICONS.google;
+  }
 
   function isFirefox() {
     return /Firefox/i.test(navigator.userAgent) || typeof browser !== "undefined";
@@ -73,8 +92,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function showHint(text, timeoutMs = 1500) {
     els.saveHint.textContent = text;
+    els.saveHint.classList.add("show");
     if (hintTimer) clearTimeout(hintTimer);
     hintTimer = setTimeout(() => {
+      els.saveHint.classList.remove("show");
       els.saveHint.textContent = "";
     }, timeoutMs);
   }
@@ -127,23 +148,29 @@ document.addEventListener("DOMContentLoaded", async () => {
   function render(nextSettings) {
     applying = true;
     settings = nextSettings;
-    els.enabledToggle.checked = !!settings.enabled;
-    els.statusText.textContent = settings.enabled ? "ACTIVE" : "INACTIVE";
-    els.statusDot.classList.toggle("on", !!settings.enabled);
+    const enabled = !!settings.enabled;
+    els.enableBtn.classList.toggle("on", enabled);
+    els.enableLabel.textContent = enabled ? "Translation on" : "Enable translation";
 
     els.languageSelect.value = settings.targetLanguage || "en";
-    els.engineSelect.value = settings.engine || "google";
+    els.engineSelect.value = settings.engine || "microsoft";
+    setEngineIcon(settings.engine || "microsoft");
     els.deeplKey.value = settings.deepl?.apiKey || "";
     els.deeplEndpoint.value = settings.deepl?.endpointMode || "auto";
     els.deeplFallback.checked = settings.deepl?.fallbackToGoogle !== false;
-    els.deeplSection.style.display = settings.engine === "deepl" ? "grid" : "none";
-    els.microsoftSection.style.display = settings.engine === "microsoft" ? "grid" : "none";
+    els.deeplOptimize.checked = settings.deepl?.optimizeUsage === true;
+    els.deeplMenuRow.style.display = settings.engine === "deepl" ? "flex" : "none";
 
     els.bilingualPage.value = settings.bilingual?.page || "off";
     els.bilingualComments.value = settings.bilingual?.comments || "off";
     els.bilingualDynamic.value = settings.bilingual?.dynamic || "off";
     els.bilingualDanmaku.value = settings.bilingual?.danmaku || "off";
     els.bilingualCaptions.value = settings.bilingual?.captions || "off";
+    const anyBilingual = BILINGUAL_AREAS.some(
+      (area) => (settings.bilingual?.[area] || "off") !== "off"
+    );
+    els.bilingualBtn.classList.toggle("on", anyBilingual);
+    els.bilingualBtn.setAttribute("aria-pressed", String(anyBilingual));
 
     els.areaPage.checked = settings.areas?.page !== false;
     els.areaComments.checked = settings.areas?.comments !== false;
@@ -157,16 +184,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     applying = false;
   }
 
-  async function persist(partial, message = "Saved") {
+  async function persist(partial) {
     if (applying) return;
-    showHint("Saving...", 700);
     const next = await settingsManager.update(partial);
     render(next);
     sendToBiliTabs({
       type: "bte:updateSettings",
       payload: partial,
     });
-    showHint(message);
+    showHint("Saved");
   }
 
   async function getCachedUpdateInfo() {
@@ -185,11 +211,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     const isNew = compareVersions(releaseTag, localVersion) > 0;
     if (isNew) {
       els.updateStatus.textContent = `Update ${releaseTag} available`;
-      els.updateBtn.style.display = "inline-block";
-      els.updateBtn.textContent = "Update";
+      els.updateBtn.style.display = "block";
+      els.updateBtn.textContent = `Update to ${releaseTag}`;
+      if (els.updateBadge) els.updateBadge.style.display = "inline-block";
     } else {
       els.updateStatus.textContent = "Up to date";
       els.updateBtn.style.display = "none";
+      if (els.updateBadge) els.updateBadge.style.display = "none";
     }
   }
 
@@ -240,7 +268,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     render(next);
   });
 
-  els.enabledToggle.addEventListener("change", () => persist({ enabled: els.enabledToggle.checked }));
+  els.enableBtn.addEventListener("click", () => persist({ enabled: !settings.enabled }));
   els.languageSelect.addEventListener("change", () => {
     const targetLanguage = els.languageSelect.value;
     languageManager.switchLanguage(targetLanguage);
@@ -259,6 +287,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   els.deeplKey.addEventListener("change", () => {
     persist({ deepl: { apiKey: els.deeplKey.value.trim() } }, "DeepL key updated");
   });
+  els.deeplOptimize.addEventListener("change", () => {
+    persist({ deepl: { optimizeUsage: els.deeplOptimize.checked } });
+  });
 
   els.bilingualPage.addEventListener("change", () => persist({ bilingual: { page: els.bilingualPage.value } }));
   els.bilingualComments.addEventListener("change", () =>
@@ -272,6 +303,31 @@ document.addEventListener("DOMContentLoaded", async () => {
   );
   els.bilingualCaptions.addEventListener("change", () =>
     persist({ bilingual: { captions: els.bilingualCaptions.value } })
+  );
+
+  // "Show bilingual" button — flips every area between bilingual (stacked) and replace (off).
+  // The per-area selects in the Bilingual panel still allow fine-grained control.
+  els.bilingualBtn.addEventListener("click", () => {
+    const anyBilingual = BILINGUAL_AREAS.some(
+      (area) => (settings.bilingual?.[area] || "off") !== "off"
+    );
+    const mode = anyBilingual ? "off" : "stacked";
+    persist({
+      bilingual: { page: mode, comments: mode, dynamic: mode, danmaku: mode, captions: mode },
+    });
+  });
+
+  // Slide-in panels (Exclude areas / Bilingual per area / Settings).
+  document.querySelectorAll("[data-open]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById(btn.dataset.open);
+      if (panel) panel.classList.add("open");
+    })
+  );
+  document.querySelectorAll("[data-close]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".view-panel.open").forEach((p) => p.classList.remove("open"));
+    })
   );
 
   els.areaPage.addEventListener("change", () => persist({ areas: { page: els.areaPage.checked } }));
@@ -298,6 +354,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   els.githubBtn.addEventListener("click", () => openLink("https://github.com/LazyScar/BiliBili-To-English"));
   els.docsBtn.addEventListener("click", () => openLink("https://github.com/LazyScar/BiliBili-To-English#readme"));
   els.updateBtn.addEventListener("click", () => {
+    openLink(isFirefox() ? FIREFOX_ADDON_PAGE : GITHUB_RELEASE_PAGE);
+  });
+  els.updateBadge.addEventListener("click", () => {
     openLink(isFirefox() ? FIREFOX_ADDON_PAGE : GITHUB_RELEASE_PAGE);
   });
 });

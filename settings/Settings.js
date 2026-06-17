@@ -10,11 +10,12 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     targetLanguage: "en",
-    engine: "google",
+    engine: "microsoft",
     deepl: {
       apiKey: "",
       endpointMode: "auto",
       fallbackToGoogle: true,
+      optimizeUsage: false,
     },
     microsoft: {
       apiKey: "",
@@ -102,6 +103,7 @@
     merged.deepl.apiKey = typeof merged.deepl.apiKey === "string" ? merged.deepl.apiKey.trim() : "";
     merged.deepl.endpointMode = normalizeEndpoint(merged.deepl.endpointMode);
     merged.deepl.fallbackToGoogle = merged.deepl.fallbackToGoogle !== false;
+    merged.deepl.optimizeUsage = merged.deepl.optimizeUsage === true;
     merged.microsoft = merged.microsoft || {};
     merged.microsoft.apiKey = typeof merged.microsoft.apiKey === "string" ? merged.microsoft.apiKey.trim() : "";
     merged.microsoft.region = typeof merged.microsoft.region === "string" ? merged.microsoft.region.trim() : "";

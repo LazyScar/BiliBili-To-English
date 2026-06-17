@@ -10,6 +10,7 @@
   let currentSettings = null;
   let initialized = false;
   let lastUrl = location.href;
+  let lastAppliedSignature = "";
 
   function isBilibiliHost(hostname) {
     const host = String(hostname || "").toLowerCase();
@@ -41,6 +42,81 @@
     };
   }
 
+  // Small, unobtrusive page badge shown when translations can't be fetched (network /
+  // engine errors). Lives bottom-left so it never collides with captions (bottom-center)
+  // or Bilibili's back-to-top control (bottom-right). Owned by us so it is never itself
+  // translated or scanned. Top-frame only.
+  class StatusIndicator {
+    constructor() {
+      this.el = null;
+      this.state = "ok";
+      this.hideTimer = null;
+    }
+
+    ensureEl() {
+      if (this.el && this.el.isConnected) return this.el;
+      const el = document.createElement("div");
+      el.setAttribute("data-bte-owned", "1");
+      el.setAttribute("role", "status");
+      el.style.cssText = [
+        "position:fixed", "left:16px", "bottom:16px", "z-index:2147483647",
+        "display:flex", "align-items:center", "gap:8px",
+        "padding:8px 12px", "border-radius:999px",
+        "background:rgba(15,17,22,0.92)", "color:#e9edf7",
+        "font:600 12px/1 'Segoe UI',system-ui,sans-serif",
+        "border:1px solid rgba(251,114,153,0.45)",
+        "box-shadow:0 8px 24px rgba(0,0,0,0.45)", "backdrop-filter:blur(6px)",
+        "pointer-events:none", "opacity:0", "transform:translateY(6px)",
+        "transition:opacity .2s ease, transform .2s ease",
+      ].join(";");
+      const dot = document.createElement("span");
+      dot.style.cssText =
+        "width:8px;height:8px;border-radius:50%;background:#fb7299;box-shadow:0 0 8px #fb7299;flex:0 0 auto;";
+      const label = document.createElement("span");
+      label.textContent = "Translation unavailable — retrying";
+      el.appendChild(dot);
+      el.appendChild(label);
+      (document.body || document.documentElement).appendChild(el);
+      this.el = el;
+      return el;
+    }
+
+    show() {
+      const el = this.ensureEl();
+      requestAnimationFrame(() => {
+        el.style.opacity = "1";
+        el.style.transform = "translateY(0)";
+      });
+    }
+
+    hide() {
+      if (!this.el) return;
+      this.el.style.opacity = "0";
+      this.el.style.transform = "translateY(6px)";
+    }
+
+    update(status) {
+      if (this.hideTimer) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+      if (status === "error") {
+        if (this.state !== "error") {
+          this.state = "error";
+          this.show();
+        }
+        // Auto-recover the badge if the errors simply stop arriving.
+        this.hideTimer = setTimeout(() => {
+          this.state = "ok";
+          this.hide();
+        }, 6000);
+      } else if (this.state === "error") {
+        this.state = "ok";
+        this.hideTimer = setTimeout(() => this.hide(), 1200);
+      }
+    }
+  }
+
   function applyLanguage(settings) {
     if (!window.languageManager || typeof window.languageManager.switchLanguage !== "function") {
       return;
@@ -54,6 +130,14 @@
   async function applySettings(settings) {
     currentSettings = settings;
     applyLanguage(settings);
+    // A single popup change reaches us through both the runtime message AND the
+    // storage-change/onChange path, so applySettings can be invoked 2–3 times with
+    // identical settings. Each invocation triggers a full DOM rescan + caption
+    // re-prefetch, so skip when nothing actually changed. (Route changes go through
+    // handleRouteChange, not here, so navigation re-applies are unaffected.)
+    const signature = JSON.stringify(settings);
+    if (signature === lastAppliedSignature) return;
+    lastAppliedSignature = signature;
     if (!settings.enabled) {
       domTranslator?.stop({ restore: true });
       captionManager?.stop({ restore: true });
@@ -200,6 +284,12 @@
     translationManager = new ROOT.TranslationManager(settingsManager);
     await translationManager.initialize();
 
+    // Surface fetch/engine failures on the page (top frame only).
+    if (window.top === window.self) {
+      const statusIndicator = new StatusIndicator();
+      translationManager.setStatusListener((status) => statusIndicator.update(status));
+    }
+
     domTranslator = new ROOT.DomTranslator(translationManager, settingsManager);
     await domTranslator.initialize();
 
@@ -207,7 +297,7 @@
     await captionManager.initialize();
 
     settingsManager.onChange((next) => {
-      applySettings(next);
+      applySettings(next).catch((error) => console.warn("BTE applySettings failed:", error));
     });
 
     await applySettings(currentSettings);

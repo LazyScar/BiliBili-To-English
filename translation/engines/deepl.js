@@ -138,7 +138,8 @@
           const message = data?.message || `DeepL request failed (${response.status})`;
           this.lastError = message;
           console.warn("BTE DeepL error:", message);
-          return new Array(texts.length).fill(null);
+          // Throw so the manager falls back (to Microsoft) and doesn't negative-cache a fetch failure.
+          throw new Error(message);
         }
         const translations = Array.isArray(data?.translations) ? data.translations : [];
         return texts.map((input, index) => {
@@ -149,7 +150,7 @@
       } catch (error) {
         this.lastError = String(error && error.message ? error.message : error);
         console.warn("BTE DeepL translate failed:", error);
-        return new Array(texts.length).fill(null);
+        throw error;
       }
     }
   }

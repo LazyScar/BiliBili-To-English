@@ -69,6 +69,7 @@
   const CAPTION_AUTO_TRACK_PATTERN = /(ai|auto|machine|translated|translation)/i;
 
   // Pre-joined selector strings — avoids looping per selector on every node check
+  const CAPTION_SELECTOR = CAPTION_SELECTORS.join(",");
   const CAPTION_INTERACTIVE_ANCESTOR_SELECTOR = CAPTION_INTERACTIVE_ANCESTOR_SELECTORS.join(",");
   const CAPTION_INTERACTIVE_DESCENDANT_SELECTOR = CAPTION_INTERACTIVE_DESCENDANT_SELECTORS.join(",");
 
@@ -152,7 +153,7 @@
     try {
       const bg = await runtimeMessage({
         type: "bte:bgFetch",
-        payload: { url, method: "GET", credentials: "omit" },
+        payload: { url, method: "GET", credentials },
       });
       if (bg && bg.ok) {
         return parseJsonOrRaw(bg.text || "", "application/json");
@@ -229,6 +230,12 @@
 
     canRun() {
       return !!(this.running && this.settings && this.settings.enabled && this.settings.areas.captions);
+    }
+
+    // DeepL "Optimize usage": translate subtitles only as they're watched instead of
+    // pre-translating the whole video, to conserve DeepL characters. Scoped to DeepL only.
+    isUsageOptimized() {
+      return this.settings?.engine === "deepl" && this.settings?.deepl?.optimizeUsage === true;
     }
 
     isVideoRoute() {
@@ -1026,6 +1033,8 @@
       if (payload.backgroundPrefetchRunning) return;
       if (payload.prefetchSequenceRunning) return;
       if (!this.canRun()) return;
+      // Optimize mode never pre-translates the full video; window + on-demand cover what's watched.
+      if (this.isUsageOptimized()) return;
 
       const sourceLines =
         payload.sourceSet instanceof Set
@@ -1231,26 +1240,32 @@
             if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
               await this.translateCaptionLineSet(cacheKey, payload, nearLines);
             }
-            const excluded = new Set([...priorityLines]);
-            const futureChunk = this.collectFuturePrefetchLines(payload, excluded);
-            if (futureChunk.length && this.currentVideoCacheKey === cacheKey) {
-              await this.translateCaptionLineSet(cacheKey, payload, futureChunk);
-            }
-            if (remainingLines.length && this.currentVideoCacheKey === cacheKey) {
-              await this.translateCaptionLineSet(cacheKey, payload, remainingLines);
-            }
+            // DeepL "Optimize usage": stop after the immediate vicinity. The window
+            // prefetch + on-demand fallback still translate lines as they're watched,
+            // but we skip pre-translating the rest of the video and the extra tracks —
+            // which is where the bulk of DeepL characters would otherwise be spent.
+            if (!this.isUsageOptimized()) {
+              const excluded = new Set([...priorityLines]);
+              const futureChunk = this.collectFuturePrefetchLines(payload, excluded);
+              if (futureChunk.length && this.currentVideoCacheKey === cacheKey) {
+                await this.translateCaptionLineSet(cacheKey, payload, futureChunk);
+              }
+              if (remainingLines.length && this.currentVideoCacheKey === cacheKey) {
+                await this.translateCaptionLineSet(cacheKey, payload, remainingLines);
+              }
 
-            const additionalTracks = tracks
-              .filter((_track, index) => index !== primary.index)
-              .slice(0, CAPTION_EXTRA_TRACK_LIMIT);
-            if (additionalTracks.length && this.currentVideoCacheKey === cacheKey) {
-              await this.prefetchAdditionalTrackBodies(cacheKey, payload, additionalTracks);
-            }
+              const additionalTracks = tracks
+                .filter((_track, index) => index !== primary.index)
+                .slice(0, CAPTION_EXTRA_TRACK_LIMIT);
+              if (additionalTracks.length && this.currentVideoCacheKey === cacheKey) {
+                await this.prefetchAdditionalTrackBodies(cacheKey, payload, additionalTracks);
+              }
 
-            if (this.currentVideoCacheKey === cacheKey) {
-              payload.prefetchPhase = "complete";
-              this.videoCache.set(cacheKey, payload);
-              this.applyToActiveSubtitleNodes();
+              if (this.currentVideoCacheKey === cacheKey) {
+                payload.prefetchPhase = "complete";
+                this.videoCache.set(cacheKey, payload);
+                this.applyToActiveSubtitleNodes();
+              }
             }
           } catch (error) {
             this.warnOnce(`prefetch-sequence-failed-${cacheKey}`, "Caption prefetch sequence failed.", error);
@@ -1282,10 +1297,16 @@
         const comparableHit = this.currentSubtitleData.map.get(comparable);
         if (comparableHit) return comparableHit;
       }
+      // Time-based active line: ONLY usable as this line's translation when the active
+      // line's source text actually matches the on-screen text. Returning the active
+      // line's translation for a non-matching line is what causes cross-line/cross-video
+      // contamination (unrelated English under the current Chinese, flickering as the map
+      // fills in). When nothing matches we return null so the caller translates the real
+      // on-screen text instead of borrowing a neighbor's translation.
       const active = this.findActiveTimedLine(this.getVideoCurrentTime());
       if (!active || !active.translated) return null;
       const activeComparable = this.extractComparableCaptionText(active.original);
-      if (!comparable || !activeComparable) return active.translated;
+      if (!comparable || !activeComparable) return null;
       if (
         comparable === activeComparable ||
         comparable.includes(activeComparable) ||
@@ -1293,7 +1314,7 @@
       ) {
         return active.translated;
       }
-      return this.containsCjkText(normalized) ? active.translated : null;
+      return null;
     }
 
     containsCjkText(text) {
@@ -1639,7 +1660,7 @@
         if (!text || text.length > 220) return;
         nodes.add(node);
       };
-      document.querySelectorAll(CAPTION_SELECTORS.join(",")).forEach(addIfSafe);
+      document.querySelectorAll(CAPTION_SELECTOR).forEach(addIfSafe);
       // Narrow fallback: walk CJK text nodes inside subtitle containers ONLY.
       // We intentionally do NOT walk #bilibili-player broadly — that picks up
       // player controls, buttons, menus, tooltips, and other UI text.
