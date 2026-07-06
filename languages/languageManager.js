@@ -48,6 +48,9 @@ class LanguageManager {
             case 'vi':
                 this.dictionary = viDictionary;
                 break;
+            case 'id':
+                this.dictionary = idDictionary;
+                break;
             default:
                 this.dictionary = enDictionary;
         }
