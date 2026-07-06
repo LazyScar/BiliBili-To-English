@@ -71,7 +71,7 @@ The extension uses a combination of **dictionary-based word matching** and **aut
 - French 🇫🇷  
 - Japanese 🇯🇵  
 - Russian 🇷🇺  
-- Vietnamese 🇻🇳a
+- Vietnamese 🇻🇳
 - Indonesian 🇮🇩
 - More languages coming soon!
 
