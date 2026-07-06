@@ -6,7 +6,8 @@ class LanguageManager {
             'fr': { name: 'Français', flag: '🇫🇷' },
             'ja': { name: '日本語', flag: '🇯🇵' },
             'ru': { name: 'Русский', flag: '🇷🇺' },
-            'vi': { name: 'Tiếng Việt', flag: '🇻🇳' }
+            'vi': { name: 'Tiếng Việt', flag: '🇻🇳' },
+            'id': { name: 'Indonesia', flag: '🇮🇩' }
         };
         this.dictionary = enDictionary;
     }
@@ -46,6 +47,9 @@ class LanguageManager {
                 break;
             case 'vi':
                 this.dictionary = viDictionary;
+                break;
+            case 'id':
+                this.dictionary = idDictionary;
                 break;
             default:
                 this.dictionary = enDictionary;
