@@ -1,129 +1,179 @@
-# How to Contribute a New Language
+# Contributing to BiliBili To English
 
-We are thrilled that you want to contribute to BiliBili To English! Adding a new language is a great way to help users from all over the world.
+Thank you for your interest! This guide explains how to add a new language to the extension.  
+Before you begin, make sure you have a [GitHub](https://github.com) account and are comfortable with basic Git (fork, commit, pull request).
 
-Follow these steps to add a new language:
+---
 
-### Step 1: Fork the Repository
+## How the Extension Works – Quick Overview
 
-First, create a fork of the main repository on GitHub. This will create a copy of the project under your own GitHub account that you can freely edit.
+The extension uses a **hybrid translation system**:
 
-### Step 2: Create a New Language File
+1. **Local dictionary** – Pre‑translated common UI strings (stored in `languages/*.js`).  
+2. **Automatic translation engines** – For any term not in the dictionary, the extension falls back to **Google Translate**, **DeepL**, or **Microsoft Translator** (configurable).  
+3. **Real‑time injection** – Translations are inserted into the page immediately, without reloading.
 
-1.  Navigate to the `languages/` directory in your forked repository.
-2.  Create a new file. The file name should usually follow the [ISO 639-1 language code](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) format. For example:
-    - `es.js` for Spanish
-    - `de.js` for German
-    - `ja.js` for Japanese
-3.  Copy the entire content of `languages/en.js` and paste it into your new language file.
-4.  Rename the dictionary variable so it matches your language code. For example:
+Your contribution improves the **first layer** – making translations faster and more accurate for your language.
 
-    ```javascript
-    const esDictionary = {
-      // ...
-    };
-    ```
+---
 
-### Step 3: Translate the Dictionary
+## Step‑by‑Step Guide
 
-1.  In your new file (for example, `es.js`), you will see a large JavaScript object.
-2.  Your task is to **translate the English text (the value) into your target language**. Do not change the Chinese text (the key).
-3.  Keep the same object structure, punctuation, and key names so the dictionary keeps working with the current code.
-4.  Translate as many phrases as you can. It is okay if you cannot translate everything because the extension now falls back to the selected translation engine when a dictionary entry is missing.
+### 1. Fork the Repository
 
-    **Example:**
+- Go to [github.com/LazyScar/BiliBili-To-English](https://github.com/LazyScar/BiliBili-To-English) and click **Fork**.
+- Clone your fork locally:
 
-    ```javascript
-    // Keep the Chinese key, translate only the value
-    const esDictionary = {
-      "example-key": "Translated text",
-    };
-    ```
+```bash
+git clone https://github.com/YOUR_USERNAME/BiliBili-To-English.git
+cd BiliBili-To-English
+```
 
-### Step 4: Update the Language Manager
+### 2. Create a New Language File
 
-1.  Open the `languages/languageManager.js` file.
-2.  Find the `availableLanguages` object.
-3.  Add your new language to this object. You will need the language code, the language's native name, and a flag emoji.
+- Navigate to the `languages/` folder.
+- Create a new file named after the **ISO 639‑1** code of your language (e.g. `es.js` for Spanish, `de.js` for German, `ko.js` for Korean).
+- Copy the entire content of `languages/en.js` into your new file.
+- **Rename the dictionary variable** to match your language code. For example, if your file is `es.js`:
 
-    **Example (adding Spanish):**
+```javascript
+// languages/es.js
+const esDictionary = {
+  // ... (all keys and values)
+};
+```
 
-    ```javascript
-    this.availableLanguages = {
-      en: { name: "English", flag: "FLAG" },
-      fr: { name: "Francais", flag: "FLAG" },
-      es: { name: "Espanol", flag: "FLAG" },
-    };
-    ```
+> The variable name must match the language code exactly (e.g., `esDictionary`, `deDictionary`).
 
-4.  Next, in the `switchLanguage` method, add a `case` for your new language to load its dictionary.
+### 3. Translate the Dictionary
 
-    **Example (adding Spanish):**
+- In your new file, you will see a large JavaScript object.
+- **Keys** are Chinese text (do **not** change them).
+- **Values** are the English translations – replace them with your target language translations.
 
-    ```javascript
-    switch (langCode) {
-      case "es":
-        this.dictionary = esDictionary;
-        break;
-    }
-    ```
+**Example:**
 
-5.  This step is important because the popup language selector reads from `availableLanguages`, and the selected language is stored in extension settings as `targetLanguage`.
+```javascript
+// Before (from en.js):
+"首页": "Home",
 
-### Step 5: Update the Loaded Script Files
+// After (in es.js):
+"首页": "Inicio",
+```
 
-1.  Open the `manifest.json` file.
-2.  Find the `content_scripts` section.
-3.  Add the path to your new language file to the `js` array. Make sure to place it before `languages/languageManager.js`.
+- Translate as many entries as you can. Missing entries will be handled by the automatic translation engines.
 
-    **Example (adding Spanish):**
+### 4. Update the Language Manager (`languages/languageManager.js`)
 
-    ```json
-    "js": [
-      "languages/en.js",
-      "languages/fr.js",
-      "languages/es.js",
-      "languages/languageManager.js",
-      "settings/Settings.js",
-      "main.js"
-    ]
-    ```
+This file controls which languages appear in the popup and loads the correct dictionary.
 
-4.  Open `popup.html`.
-5.  Add your new language file to the `<script>` list near the bottom of the file, also before `languages/languageManager.js`.
+- Locate the `availableLanguages` object and add your language:
 
-    **Example (adding Spanish):**
+```javascript
+this.availableLanguages = {
+  'en': { name: 'English', flag: '🇺🇸' },
+  // ... existing languages ...
+  'es': { name: 'Español', flag: '🇪🇸' },   // <-- Add yours
+};
+```
 
-    ```html
-    <script src="languages/en.js"></script>
-    <script src="languages/fr.js"></script>
-    <script src="languages/es.js"></script>
-    <script src="languages/languageManager.js"></script>
-    ```
+- Then, inside the `switchLanguage` method, add a `case` for your language:
 
-6.  This is required because the page translator and the popup both load language files separately in the new code.
+```javascript
+switch (langCode) {
+  // ... existing cases ...
+  case 'es':
+    this.dictionary = esDictionary;   // use your variable name
+    break;
+}
+```
 
-### Step 6: Check Translation Engine Support
+### 5. Update the Extension Manifests
 
-1.  The dictionary handles common fixed text, but missing entries are translated by the selected engine (`Google`, `Microsoft`, or `DeepL`).
-2.  In most cases, using a normal ISO 639-1 code is enough for Google and Microsoft.
-3.  If your language needs a special DeepL target code, update `translation/engines/deepl.js` in the `toDeepLLang` mapping.
-4.  If DeepL does not support your language, the language can still be added, but contributors should verify it works correctly with Google and Microsoft, and with DeepL fallback behavior if needed.
+The language file must be loaded in **two places** – for the content script and for the popup.
 
-### Step 7: Test Your Language
+#### a) `manifest.json`
 
-1.  Reload the extension in your browser.
-2.  Open the popup and make sure your language appears in the **Target language** dropdown.
-3.  Select your language and confirm the choice is saved after reopening the popup.
-4.  Visit a few BiliBili pages and check that:
-    - dictionary-based UI text is translated correctly
-    - comments, captions, or dynamic content still translate through the selected engine
-    - nothing breaks in the popup or on the page
+- In the `content_scripts` section, find the `"js"` array.
+- Add your new language file **before** `languages/languageManager.js`:
 
-### Step 8: Submit a Pull Request
+```json
+"js": [
+  "languages/en.js",
+  "languages/fr.js",
+  // ... all existing language files ...
+  "languages/es.js",          // <-- Add yours
+  "languages/languageManager.js",
+  "settings/Settings.js",
+  "main.js"
+]
+```
 
-You are all done! Commit your changes and create a Pull Request from your forked repository to the main repository. If your language is fully ready for users, you can also update the supported language list in the README files.
+#### b) `popup.html`
 
-We will review your contribution, merge it, and include it in the next release.
+- Near the bottom of the file, find the `<script>` list.
+- Add your new file **before** `languages/languageManager.js`:
 
-Thank you for making this extension better!
+```html
+<script src="languages/en.js"></script>
+<script src="languages/fr.js"></script>
+<!-- ... other languages ... -->
+<script src="languages/es.js"></script>
+<script src="languages/languageManager.js"></script>
+```
+
+### 6. (Optional) Verify Translation Engine Support
+
+- Most languages work out‑of‑the‑box with Google and Microsoft.
+- If you want to support **DeepL** and your language uses a non‑standard target code, update the mapping in `translation/engines/deepl.js`.  
+  Look for the `toDeepLLang` object and add your language code if needed.
+
+> If DeepL does not support your language, the extension will fall back to Google/Microsoft automatically.
+
+### 7. Test Your Changes
+
+1. **Load the extension** in your browser:
+   - Chromium: go to `chrome://extensions/`, enable **Developer mode**, click **Load unpacked**, and select the project folder.
+   - Firefox: go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add‑on**, and select `manifest.json`.
+
+2. **Reload** the extension after any changes.
+
+3. Open the **popup** (click the extension icon) and verify:
+   - Your language appears in the **Target language** dropdown with the correct flag.
+   - Selecting it saves your preference.
+
+4. Visit a few Bilibili pages and check:
+   - UI text (from the dictionary) is translated correctly.
+   - Comments / captions are still translated (fallback engines work).
+   - No errors appear in the browser console (F12 → Console).
+
+### 8. Submit a Pull Request
+
+- Commit your changes:
+
+```bash
+git add .
+git commit -m "Add [LANGUAGE_NAME] language support"
+git push origin main
+```
+
+- On GitHub, open a Pull Request from your fork to the main repository (`LazyScar/BiliBili-To-English`, branch `main`).
+- Describe your changes clearly.
+
+---
+
+## Contribution Checklist
+
+Before submitting, ensure you have:
+
+- [ ] Created a language file with the correct ISO code (e.g., `es.js`).
+- [ ] Renamed the dictionary variable (e.g., `esDictionary`).
+- [ ] Translated all (or most) English values into your target language.
+- [ ] Added your language to `availableLanguages` in `languageManager.js`.
+- [ ] Added a `case` for your language in `switchLanguage`.
+- [ ] Added your file to the `"js"` array in `manifest.json` (content_scripts).
+- [ ] Added your file to the `<script>` list in `popup.html`.
+- [ ] Tested the extension on Bilibili pages with your language selected.
+- [ ] No console errors.
+
+---
