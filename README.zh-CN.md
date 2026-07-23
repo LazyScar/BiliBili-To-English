@@ -112,7 +112,7 @@
 
 ## 参与贡献
 
-欢迎翻译志愿者和开发者参与。详见 [CONTRIBUTION.md](CONTRIBUTION.md)。
+欢迎翻译志愿者和开发者参与。详见 [CONTRIBUTING.md](CONTRIBUTION.md)。
 
 ---
 
