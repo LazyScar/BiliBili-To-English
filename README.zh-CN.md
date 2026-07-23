@@ -1,8 +1,8 @@
 # <img src="https://raw.githubusercontent.com/LazyScar/BiliBili-To-English/refs/heads/main/icon128.png" height="50"> BiliBili To English
 
-实时翻译并畅享 BiliBili —— 直接在页面中将内容翻译为英语或其他语言。
+在 B 站页面上直接显示英文（或其他语言）翻译，实时生效。
 
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/LazyScar/BiliBili-To-English?label=最新版本&sort=semver)](https://github.com/LazyScar/BiliBili-To-English/releases)
+[![GitHub release](https://img.shields.io/github/v/release/LazyScar/BiliBili-To-English?label=最新版本&sort=semver)](https://github.com/LazyScar/BiliBili-To-English/releases)
 [![GitHub release date](https://img.shields.io/github/release-date/LazyScar/BiliBili-To-English)](https://github.com/LazyScar/BiliBili-To-English/releases/latest)
 [![GitHub issues](https://img.shields.io/github/issues/LazyScar/BiliBili-To-English?color=red)](https://github.com/LazyScar/BiliBili-To-English/issues)
 [![GitHub license](https://img.shields.io/github/license/LazyScar/BiliBili-To-English?color=lightgrey)](https://github.com/LazyScar/BiliBili-To-English/blob/main/LICENSE)
@@ -13,111 +13,115 @@
 
 ---
 
-## 概述
-
-**BiliBili To English** 是一款浏览器扩展，用于将 **BiliBili 的界面、视频内容和字幕** 翻译为英语或多种其他语言。  
-支持 **Chrome、Firefox、Brave、Opera、Edge** 以及其他基于 Chromium / Firefox 的浏览器。
-
-该扩展可让用户以自己偏好的语言无缝浏览 BiliBili 内容，**即时** 翻译界面元素、评论和视频信息，无需打开新标签页或刷新页面。
+## 目录
+- [简介](#简介)
+- [安装](#安装)
+- [截图](#截图)
+- [功能](#功能)
+- [支持的语言](#支持的语言)
+- [原理](#原理)
+- [常见问题](#常见问题)
+- [参与贡献](#参与贡献)
+- [致谢](#致谢)
 
 ---
 
-## 安装
+## 简介
 
-### Firefox
-<p align="left">
-  <a href="https://addons.mozilla.org/zh-CN/firefox/addon/bilibili-to-english/">
+浏览器扩展，实时翻译 B 站的界面、评论、标题和字幕。支持 **Chrome、Firefox、Brave、Opera、Edge** 等。装好、选个语言，浏览时自动显示翻译。
+
+<p align="center">
+  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
     <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
+  </a>
+  <a href="https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab">
+    <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/chrome-web-store.png" height="60">
   </a>
 </p>
 
-### Chrome、Brave、Opera 和 Edge
-- 目前处于手动安装阶段。
-- 手动安装步骤：
-  1. 将此仓库下载为 ZIP 文件。
-  2. 解压到一个文件夹。
-  3. 打开浏览器并访问 `chrome://extensions/`。
-  4. 启用 **开发者模式**（右上角）。
-  5. 点击 **加载已解压的扩展程序**，选择解压后的文件夹。
-  6. 加载完成后，可关闭 **开发者模式**。
+## 安装
+
+### 浏览器商店
+- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/)
+- **Chrome** – [Chrome 网上应用店](https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab)
+
+### 手动安装
+
+**Chromium 浏览器（Chrome、Edge、Opera、Brave）**
+1. 下载仓库 ZIP 文件并解压。
+2. 打开 `chrome://extensions/`，启用开发者模式。
+3. 点击加载已解压的扩展程序，选择解压后的文件夹。
+4. 安装完成，可以关闭开发者模式。
+
+**Firefox**
+1. 下载仓库 ZIP 文件并解压。
+2. 打开 Firefox，在地址栏输入 `about:debugging#/runtime/this-firefox`。
+3. 点击临时载入附加组件…。
+4. 选择解压文件夹内的任意文件（如 manifest.json）。
+5. 扩展在 Firefox 重启前有效。如需永久安装，请使用 Mozilla Add‑ons 版本。
 
 ---
 
-## 功能特性
+## 截图
 
-- **多语言支持** —— 可翻译为英语、法语、俄语、日语等（更多语言即将推出）。  
-- **美观的语言选择界面** —— 简洁的弹窗菜单，包含国旗图标和语言名称。  
-- **字幕实时翻译** —— 自动翻译视频字幕。  
-- **整页翻译** —— 翻译按钮、菜单和界面元素（包括创作者 / 工作室页面）。  
-- **语言记忆** —— 自动保存你选择的语言。
-
-| 首页 | 视频 | 评论 | 创作者 / 工作室 |
+| 主页 | 视频页 | 评论区 | UP 主/工作室页 |
 | :--: | :--: | :--: | :--: |
 | <img height="100" src="https://github.com/user-attachments/assets/75418edd-e1e4-4006-9db1-2c75c4328df7" /> | <img height="100" src="https://github.com/user-attachments/assets/05240571-4f36-4362-bc53-5ad8e86b70e8" /> | <img height="100" src="https://github.com/user-attachments/assets/f67bffbd-77ae-4b7c-a21f-b1ff3af3e6d0" /> | <img height="100" src="https://github.com/user-attachments/assets/fd405262-df4f-4f3e-955b-00e1856c6d64" /> |
 
 ---
 
-## 工作原理
+## 功能
 
-该扩展结合使用 **基于词典的匹配** 与 **自动翻译引擎**。
-
-1. 页面加载时，首先在本地词典中查找常见中文词条。
-2. 若未找到对应词条，则使用 **翻译引擎** 进行动态翻译。
-3. 翻译结果会实时更新并显示在页面中。
+- 视频字幕实时翻译
+- 整页界面翻译（按钮、菜单、视频信息、UP 主/工作室页面）
+- 评论区翻译，直接在页面内阅读
+- 工具栏弹出式语言选择器，带国旗图标
+- 自动记住语言偏好
 
 ---
 
 ## 支持的语言
 
-- 英语 🇺🇸  
-- 法语 🇫🇷  
-- 日语 🇯🇵  
-- 俄语 🇷🇺  
-- 更多语言即将推出！
+🇺🇸 英语 · 🇫🇷 法语 · 🇯🇵 日语 · 🇷🇺 俄语 · 🇻🇳 越南语 · 🇮🇩 印尼语
+
+更多语言即将加入，欢迎贡献。
 
 ---
 
-## 使用方法
+## 原理
 
-1. 为你的浏览器安装该扩展。  
-2. 打开任意 BiliBili 页面。  
-3. 点击工具栏中的 **BiliBili To English** 图标。  
-4. 选择你偏好的语言。  
-5. 即可立即享受自动翻译。
+扩展内置常用 B 站术语的本地词典，未匹配的文本会通过在线翻译接口（Google、Deepl、Microsoft）处理。页面文字实时替换，无需刷新。
+
+---
+
+## 常见问题
+
+**翻译哪些内容？**  
+界面、字幕、评论、标题等页面上可见的文字。
+
+**为什么需要「访问所有网站」的权限？**  
+扩展需要读取和修改 B 站页面上的文字才能显示翻译，权限仅在 B 站域名下生效。
+
+**用了哪些翻译服务？**  
+内置词典 + 在线翻译接口（如 Google Translate 等），无需额外设置。
+
+**会收集数据吗？**  
+不会收集任何个人信息。仅待翻译文本会发送给翻译接口，不存储也不追踪。
 
 ---
 
 ## 参与贡献
 
-想要帮助改进翻译或新增语言支持？  
-请查看 [CONTRIBUTION.md](CONTRIBUTION.md) 了解如何开始。
-
-欢迎开发者和翻译人员共同参与。
+欢迎翻译志愿者和开发者参与。详见 [CONTRIBUTION.md](CONTRIBUTION.md)。
 
 ---
 
-## 常见问题（FAQ）
+## 贡献者
 
-**这个扩展的作用是什么？**  
-它可以实时翻译 BiliBili 的界面、字幕、评论和视频信息。
-
-**为什么需要访问所有网站的权限？**  
-为了执行翻译操作，扩展需要修改和替换网页中的文本内容，因此必须访问页面内容。
-
-**支持哪些翻译引擎？**  
-目前使用基于词典的翻译，以及 Google 翻译、DeepL、微软翻译（后续将增加更多选项）。
-
-**是否会收集数据？**  
-不会收集任何个人数据。但为了完成翻译，部分文本可能会被发送到翻译服务器（例如 Google、DeepL、Bing）。
-
----
-
-## Star 历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=LazyScar/BiliBili-To-English&type=Date)](https://star-history.com/#LazyScar/BiliBili-To-English&Date)
-
----
+<a href="https://github.com/LazyScar/BiliBili-To-English/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=LazyScar/BiliBili-To-English" />
+</a>
 
 ## 致谢
 
-由 **[LazyScar](https://github.com/LazyScar)** 开发 · 灵感来源于 **[XilkyTofu](https://github.com/XilkyTofu/bilibili_translate_chrome_extension)** · 感谢所有开源贡献者以及 BiliBili 社区
+由 **[LazyScar](https://github.com/LazyScar)** 开发 · 灵感来自 XilkyTofu 的项目 · 感谢所有贡献者。
