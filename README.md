@@ -112,7 +112,7 @@ No personal data is ever collected. Only the text you translate is sent to the t
 
 ## Contributing
 
-Translators and developers are welcome. See [CONTRIBUTION.md](CONTRIBUTION.md).
+Translators and developers are welcome. See [CONTRIBUTION.md](CONTRIBUTING.md).
 
 ---
 
