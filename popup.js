@@ -87,9 +87,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const BILINGUAL_AREAS = ["page", "comments", "dynamic", "danmaku", "captions"];
   const ENGINE_ICONS = {
-    // Auto: picks whichever service is working and fastest.
+    // Auto: one input routed out to whichever service is healthiest. Flat and geometric so it sits
+    // beside the real brand marks rather than looking like a generic glyph.
     auto:
-      '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#5b7cfa"/><path d="M7 15.5 12 7l5 8.5M9 13h6" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#2f3540"/><path d="M4.5 12h3.2M7.7 12c2 0 2.2-4 4.3-4M7.7 12c2 0 2.2 4 4.3 4M7.7 12h4.3" fill="none" stroke="#8fa6ff" stroke-width="1.5" stroke-linecap="round"/><circle cx="15.6" cy="8" r="2" fill="#8fa6ff"/><circle cx="15.6" cy="12" r="2" fill="#8fa6ff" opacity=".6"/><circle cx="15.6" cy="16" r="2" fill="#8fa6ff" opacity=".35"/></svg>',
     // Real Google "G" mark
     google:
       '<svg viewBox="0 0 48 48" width="16" height="16"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg>',
@@ -118,11 +119,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // Short display names for the fallback status line.
-  const ENGINE_NAMES = {
-    auto: "Auto",
-    google: "Google", microsoft: "Microsoft", yandex: "Yandex",
-    baidu: "Baidu", youdao: "Youdao", papago: "Papago", deepl: "DeepL",
+  // Service names follow the popup language: each vendor under its official name in that language
+  // where one exists, otherwise the English brand.
+  const ENGINE_I18N_KEY = {
+    auto: "svcAuto", google: "svcGoogle", microsoft: "svcMicrosoft", yandex: "svcYandex",
+    baidu: "svcBaidu", youdao: "svcYoudao", papago: "svcPapago", deepl: "svcDeepL",
   };
+  const ENGINE_FALLBACK_NAME = {
+    auto: "Auto", google: "Google Translate", microsoft: "Microsoft Translator",
+    yandex: "Yandex Translate", baidu: "Baidu Translate", youdao: "Youdao Translate",
+    papago: "Naver Papago", deepl: "DeepL",
+  };
+  const engineName = (id) => (I18N && I18N[ENGINE_I18N_KEY[id]]) || ENGINE_FALLBACK_NAME[id] || id;
 
   // Shared by Service, "Translate to" and the bilingual rows. The native <select> stays as the
   // hidden source of truth, so existing change/persist logic is untouched.
@@ -209,7 +217,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function buildEngineDropdown() {
     if (!els.engineSelect) return;
     const items = Array.from(els.engineSelect.options).map((opt) => ({
-      value: opt.value, label: opt.textContent, iconHtml: ENGINE_ICONS[opt.value] || "",
+      value: opt.value, label: engineName(opt.value), iconHtml: ENGINE_ICONS[opt.value] || "",
     }));
     engineDropdown = createIconDropdown(
       { dd: "engineDropdown", btn: "engineDropdownBtn", list: "engineDropdownList", name: "engineDropdownName", icon: "engineIcon" },
@@ -285,7 +293,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (badge) badge.classList.toggle("show", engineNeedsSetup(name));
     });
     if (engineNeedsSetup(engine)) {
-      const name = ENGINE_NAMES[engine] || engine;
+      const name = engineName(engine);
       // Kept short on purpose — the "Needs key" badge below points at where to fix it.
       el.textContent = (I18N.svcNeedsKeyShort
         ? I18N.svcNeedsKeyShort.replace("{name}", name)
@@ -301,8 +309,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       el.className = "engine-status";
       return;
     }
-    const selName = ENGINE_NAMES[status.selected] || status.selected;
-    const actName = ENGINE_NAMES[status.active] || status.active;
+    const selName = engineName(status.selected);
+    const actName = engineName(status.active);
     el.textContent = `${selName} ${engineReasonText(status.reason)}. ${I18N.svcUsing || "Using"} ${actName}.`;
     el.className = "engine-status warn";
     el.style.display = "block";
@@ -333,7 +341,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const signature = `${status.selected}:${status.reason}`;
     if (signature === shownErrorSignature) return;
     shownErrorSignature = signature;
-    const name = ENGINE_NAMES[status.selected] || status.selected || "Translation";
+    const name = engineName(status.selected) || "Translation";
     showErrorModal(
       I18N.errTitle || "Translation problem",
       `${name} ${engineReasonText(status.reason)}.`,
@@ -518,8 +526,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       const v = I18N[el.getAttribute("data-i18n-title")];
       if (v) el.setAttribute("title", v);
     });
-    // Bilingual mode option labels are built in JS, so re-localize them too.
+    // Option labels are built in JS, so re-localize them too.
     buildBilingualSelects();
+    buildEngineDropdown();
+    if (settings) setEngineDropdown(settings.engine || "auto");
     if (document.documentElement) document.documentElement.lang = lang || "en";
   }
 
