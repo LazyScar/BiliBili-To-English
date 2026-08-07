@@ -80,11 +80,20 @@ Browser extension that translates the BiliBili interface, comments, video titles
 
 ---
 
-## Supported languages
+## Supported Languages
 
-🇺🇸 English · 🇫🇷 French · 🇯🇵 Japanese · 🇷🇺 Russian · 🇻🇳 Vietnamese · 🇮🇩 Indonesian
+- English 🇬🇧
+- Français 🇫🇷
+- 日本語 🇯🇵
+- Русский 🇷🇺
+- Tiếng Việt 🇻🇳
+- Indonesia 🇮🇩
+- 한국어 🇰🇷
+- ไทย 🇹🇭
+- Português 🇵🇹
+- Español 🇪🇸
 
-More languages planned. Contributions welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to add another.
 
 ---
 
