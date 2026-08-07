@@ -53,7 +53,10 @@
 
     /* ---------- stage / views ---------- */
     .stage { position: relative; flex: 1; overflow: hidden; }
-    .view-main { position: absolute; inset: 0; overflow-y: auto; padding: 12px; }
+    /* z-index:0 makes the main view its own stacking context, so an open dropdown (elevated
+       inside it) can float over the rows below but can NEVER paint above the slide-in panels
+       (Baidu/DeepL settings, etc.), which sit above the whole main view at z-index 4. */
+    .view-main { position: absolute; inset: 0; overflow-y: auto; padding: 12px; z-index: 0; }
     .view-panel {
       position: absolute; inset: 0; background: var(--bg);
       transform: translateX(100%); transition: transform .22s ease;
@@ -81,10 +84,49 @@
     /* ---------- cards ---------- */
     .card { border-radius: 14px; border: 1px solid var(--border); background: var(--card); margin-bottom: 10px; overflow: hidden; }
     .card-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-dim); padding: 11px 13px 4px; }
+    .hint { font-size: 11px; color: var(--text-soft); padding: 2px 13px 11px; line-height: 1.4; }
+
+    /* ---------- update banner (replaces the tiny corner button) ---------- */
+    .upd-banner {
+      display: none; align-items: center; gap: 9px;
+      padding: 9px 11px; margin-bottom: 10px;
+      border-radius: 12px; border: 1px solid var(--accent-strong); background: var(--accent-soft);
+      font-size: 12px; line-height: 1.35;
+    }
+    .upd-banner.show { display: flex; }
+    .upd-banner .ub-ic { flex: 0 0 auto; color: var(--accent); display: inline-flex; }
+    .upd-banner .ub-text { flex: 1 1 auto; }
+    .upd-banner .ub-title { font-weight: 700; display: block; }
+    .upd-banner .ub-sub { color: var(--text-soft); font-size: 11px; }
+    .upd-banner .ub-go {
+      flex: 0 0 auto; border: none; cursor: pointer; border-radius: 999px;
+      background: var(--accent); color: #fff; font-weight: 700; font-size: 11px; padding: 5px 11px;
+    }
+    .upd-banner .ub-x { flex: 0 0 auto; border: none; background: transparent; color: var(--text-soft); cursor: pointer; padding: 2px; display: inline-flex; }
+
+    /* Panel-local save confirmation: the topbar hint is invisible while a slide-in panel is open,
+       so each panel shows its own short confirmation instead. */
+    .panel-hint { font-size: 11px; color: var(--accent); font-weight: 600; min-height: 13px; padding: 0 13px 8px; opacity: 0; transition: opacity .2s; }
+    .panel-hint.show { opacity: 1; }
+
+    /* "Needs setup" badge on the service menu row */
+    /* Marks features that are still being tested, so expectations are set before they are used. */
+    .beta-badge {
+      margin-left: 6px; padding: 2px 7px; border-radius: 999px;
+      background: var(--accent-soft); color: var(--accent);
+      border: 1px solid var(--accent-strong);
+      font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    }
+    .needs-badge {
+      display: none; margin-left: 6px; padding: 2px 7px; border-radius: 999px;
+      background: var(--accent); color: #fff; font-size: 9.5px; font-weight: 700; letter-spacing: .3px;
+    }
+    .needs-badge.show { display: inline-block; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 13px; min-height: 40px; }
     .row + .row { border-top: 1px solid var(--border); }
     .row-label { font-size: 13px; line-height: 1.25; display: flex; align-items: center; gap: 6px; }
+    .row-value { font-size: 13px; color: var(--text-soft); font-family: Consolas, monospace; }
 
     .srv { display: inline-flex; align-items: center; gap: 8px; }
     .engine-icon { width: 18px; height: 18px; display: inline-flex; flex: 0 0 auto; }
@@ -100,6 +142,105 @@
       background-position: calc(100% - 14px) 14px, calc(100% - 9px) 14px; background-size: 6px 6px, 6px 6px; background-repeat: no-repeat;
     }
     select:focus, input:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+    /* ---------- custom icon dropdowns (service + target language) ---------- */
+    /* The native <select> is kept as the hidden source of truth (change events, settings); the
+       visible control below is a small icon list, so each option shows its own mark/flag. Shared
+       by the Service and "Translate to" rows so both look and behave identically. */
+    .bte-hidden-select { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; opacity: 0; pointer-events: none; }
+    /* The card holding the dropdowns must not clip the floating list, and must stack above the
+       rows/cards below it while a list is open. */
+    .card.dd-host { overflow: visible; position: relative; z-index: 5; }
+    .icon-dd { position: relative; }
+    .icon-dd-btn {
+      display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+      border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-2); color: var(--text);
+      font-size: 13px; padding: 6px 10px; min-width: 178px; text-align: left;
+    }
+    .icon-dd-btn:hover { border-color: var(--accent-strong); }
+    .icon-dd-name { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .icon-dd-chev { flex: 0 0 auto; color: var(--text-soft); transition: transform .18s ease; }
+    .icon-dd.open .icon-dd-chev { transform: rotate(180deg); }
+    .icon-dd-flag { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 18px; font-size: 15px; line-height: 1; }
+    .icon-dd-list {
+      position: absolute; z-index: 60; top: calc(100% + 4px); right: 0; left: 0;
+      margin: 0; padding: 4px; list-style: none;
+      background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: 10px;
+      box-shadow: 0 8px 22px rgba(0,0,0,.28);
+      max-height: 258px; overflow-y: auto;
+      opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease;
+    }
+    .icon-dd.open .icon-dd-list { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    /* Slim, themed scrollbar so a long language list matches the popup instead of the OS default. */
+    .icon-dd-list { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+    .icon-dd-list::-webkit-scrollbar { width: 8px; }
+    .icon-dd-list::-webkit-scrollbar-track { background: transparent; }
+    .icon-dd-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid var(--bg-2); }
+    .icon-dd-list::-webkit-scrollbar-thumb:hover { background: var(--text-soft); }
+    .icon-dd-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: background .12s ease; }
+    .icon-dd-item:hover { background: var(--accent-soft); }
+    .icon-dd-item.active { background: var(--accent-soft); font-weight: 600; }
+    /* Checkmark on the selected item so it reads as a real selection, not just a clickable label. */
+    .icon-dd-item.active::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; font-size: 12px; }
+    .icon-dd-lbl { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .icon-dd-ic { width: 22px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font-size: 15px; line-height: 1; }
+    .icon-dd-ic svg { border-radius: 4px; }
+    /* Padded to match the rows above it — it used to sit flush against the card outline. */
+    .engine-status { font-size: 11px; color: var(--text-soft); line-height: 1.35; padding: 0 13px 11px; }
+    .engine-status.warn { color: var(--accent); }
+    .engine-status.setup { color: var(--accent); font-weight: 600; }
+
+    /* ---------- themed scrollbars everywhere (not just the dropdown lists) ---------- */
+    .view-main, .panel-body, .icon-dd-list {
+      scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+    }
+    .view-main::-webkit-scrollbar, .panel-body::-webkit-scrollbar { width: 9px; }
+    .view-main::-webkit-scrollbar-track, .panel-body::-webkit-scrollbar-track { background: transparent; }
+    .view-main::-webkit-scrollbar-thumb, .panel-body::-webkit-scrollbar-thumb {
+      background: var(--border-strong); border-radius: 999px; border: 2px solid var(--bg);
+    }
+    .view-main::-webkit-scrollbar-thumb:hover, .panel-body::-webkit-scrollbar-thumb:hover { background: var(--text-soft); }
+
+    /* Small "?" help marker used instead of long explanatory paragraphs. */
+    .help {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto;
+      border: 1px solid var(--border-strong); color: var(--text-dim);
+      font-size: 9px; font-weight: 700; cursor: help; user-select: none;
+    }
+    .help:hover { color: var(--accent); border-color: var(--accent-strong); }
+
+    /* ---------- error modal ---------- */
+    .modal-back {
+      position: absolute; inset: 0; z-index: 20; display: none;
+      align-items: center; justify-content: center; padding: 18px;
+      background: rgba(0,0,0,0.55);
+    }
+    .modal-back.open { display: flex; }
+    .modal {
+      width: 100%; max-width: 300px; border-radius: 14px;
+      background: var(--card); border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow); overflow: hidden;
+    }
+    .modal-head { display: flex; align-items: center; gap: 8px; padding: 12px 13px 8px; }
+    .modal-head .mi { color: var(--accent); flex: 0 0 auto; display: inline-flex; }
+    .modal-title { font-size: 13.5px; font-weight: 700; }
+    .modal-body { padding: 0 13px 12px; font-size: 12px; color: var(--text-soft); line-height: 1.45; }
+    .modal-code {
+      margin-top: 9px; padding: 8px 9px; border-radius: 8px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      font-family: Consolas, monospace; font-size: 11px; color: var(--text);
+      white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto;
+    }
+    .modal-actions { display: flex; gap: 8px; padding: 0 13px 13px; }
+    .modal-actions button {
+      flex: 1 1 auto; border: none; cursor: pointer; border-radius: 9px;
+      padding: 8px 10px; font-size: 12px; font-weight: 600;
+    }
+    .modal-actions .primary { background: var(--accent); color: #fff; }
+    .modal-actions .ghost { background: var(--bg-2); color: var(--text-soft); border: 1px solid var(--border-strong); }
+    /* Panel-head save confirmation, matching the main view's hint. */
+    .panel-head .save-hint { margin-left: auto; }
 
     /* ---------- enable button + bilingual ---------- */
     .enable-row { display: flex; gap: 10px; margin-bottom: 10px; }
@@ -185,6 +326,17 @@
     body.light .bottombar { box-shadow: 0 -8px 24px rgba(30,45,80,0.08); }
     .foot-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text-soft); font-size: 12px; cursor: pointer; }
     .foot-btn:hover { color: var(--text); background: var(--card); }
+    /* Footer update cue: current version (dim) -> arrow -> new version (accent). Reads as an
+       upgrade path at a glance without being another button. */
+    .ver-wrap { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+    .ver-wrap .ver { margin-left: 0; }
+    .ver-arrow, .ver-new { display: none; }
+    .ver-wrap.has-update .ver-arrow { display: inline-flex; color: var(--text-dim); }
+    .ver-wrap.has-update .ver-new {
+      display: inline-block; color: var(--accent); font-weight: 700;
+      font-size: 11px; font-family: Consolas, monospace; cursor: pointer;
+    }
+    .ver-wrap.has-update .ver { opacity: 0.7; }
     .ver { font-size: 11px; color: var(--text-dim); font-family: Consolas, monospace; margin-left: auto; }
     .footer-note { font-size: 10px; min-height: 11px; color: var(--text-soft); text-align: center; }
     .footer-note.upd { color: var(--accent); font-weight: 700; }
@@ -205,38 +357,74 @@
         <span class="name">BiliBili To English</span>
         <span class="top-right">
           <span class="save-hint" id="saveHint"></span>
-          <button class="update-badge" id="updateBadge" style="display:none;">Update</button>
         </span>
       </div>
 
+      <!-- Update banner: replaces the tiny corner button as the primary update surface -->
+      <div class="upd-banner" id="updateBanner">
+        <span class="ub-ic">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 16V4M12 4 7 9M12 4l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </span>
+        <span class="ub-text">
+          <span class="ub-title" id="updateBannerTitle">Update available</span>
+          <span class="ub-sub" id="updateBannerSub"></span>
+        </span>
+        <button class="ub-go" id="updateBannerGo" data-i18n="update">Update</button>
+        <button class="ub-x" id="updateBannerClose" aria-label="Dismiss">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+
       <!-- Language + service -->
-      <section class="card">
+      <section class="card dd-host">
         <div class="row">
-          <span class="row-label">Translate to</span>
-          <select id="languageSelect"></select>
+          <span class="row-label" data-i18n="translateTo">Translate to</span>
+          <span class="srv">
+            <div class="icon-dd" id="languageDropdown">
+              <button type="button" class="icon-dd-btn" id="languageDropdownBtn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="icon-dd-flag" id="languageFlag"></span>
+                <span class="icon-dd-name" id="languageDropdownName">English</span>
+                <svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <ul class="icon-dd-list" id="languageDropdownList" role="listbox" aria-label="Target language"></ul>
+            </div>
+            <select id="languageSelect" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select>
+          </span>
         </div>
         <div class="row">
-          <span class="row-label">Service</span>
+          <span class="row-label" data-i18n="service">Service</span>
           <span class="srv">
-            <span class="engine-icon" id="engineIcon"></span>
-            <select id="engineSelect">
+            <div class="icon-dd" id="engineDropdown">
+              <button type="button" class="icon-dd-btn" id="engineDropdownBtn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="engine-icon icon-dd-ic" id="engineIcon"></span>
+                <span class="icon-dd-name" id="engineDropdownName">Google Translate</span>
+                <svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <ul class="icon-dd-list" id="engineDropdownList" role="listbox" aria-label="Translation service"></ul>
+            </div>
+            <select id="engineSelect" class="bte-hidden-select" tabindex="-1" aria-hidden="true">
               <option value="microsoft">Microsoft Translator</option>
               <option value="google">Google Translate</option>
+              <option value="yandex">Yandex Translate</option>
+              <option value="baidu">Baidu Translate</option>
+              <option value="youdao">Youdao Translate</option>
+              <option value="papago">Naver Papago</option>
               <option value="deepl">DeepL</option>
             </select>
           </span>
         </div>
+        <div class="engine-status" id="engineStatus" style="display:none;"></div>
       </section>
 
       <!-- Enable + bilingual -->
       <div class="enable-row">
         <button id="enableBtn" class="enable-btn">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 3v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.5 6.5a7 7 0 1 0 9 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          <span id="enableLabel">Enable translation</span>
+          <span id="enableLabel" data-i18n="enable">Enable translation</span>
         </button>
-        <button id="bilingualBtn" class="toggle-btn" title="Show original text together with the translation" aria-label="Show bilingual">
+        <button id="bilingualBtn" class="toggle-btn" data-i18n-title="bilingualTitle" title="Show original text together with the translation" aria-label="Show bilingual">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h11M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          <span>Bilingual</span>
+          <span data-i18n="bilingual">Bilingual</span>
         </button>
       </div>
 
@@ -245,21 +433,49 @@
         <button class="menu-row" id="deeplMenuRow" data-open="panelDeepl" style="display:none;">
           <span class="menu-left">
             <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            DeepL settings
+            <span data-i18n="deeplSettings">DeepL settings</span><span class="needs-badge" id="deeplNeeds" data-i18n="needsKey">Needs key</span>
+          </span>
+          <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="menu-row" id="baiduMenuRow" data-open="panelBaidu" style="display:none;">
+          <span class="menu-left">
+            <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span data-i18n="baiduSettings">Baidu settings</span><span class="needs-badge" id="baiduNeeds" data-i18n="needsKey">Needs key</span>
+          </span>
+          <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="menu-row" id="youdaoMenuRow" data-open="panelYoudao" style="display:none;">
+          <span class="menu-left">
+            <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span data-i18n="youdaoSettings">Youdao settings</span><span class="needs-badge" id="youdaoNeeds" data-i18n="needsKey">Needs key</span>
+          </span>
+          <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="menu-row" id="papagoMenuRow" data-open="panelPapago" style="display:none;">
+          <span class="menu-left">
+            <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span data-i18n="papagoSettings">Papago settings</span><span class="needs-badge" id="papagoNeeds" data-i18n="needsKey">Needs key</span>
           </span>
           <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <button class="menu-row" data-open="panelExclude">
           <span class="menu-left">
             <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            Exclude areas
+            <span data-i18n="translateAreas">Translate areas</span>
           </span>
           <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <button class="menu-row" data-open="panelBilingual">
           <span class="menu-left">
             <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 5h7v7M5 12h7M19 19h-7v-7M19 12h-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Bilingual per area
+            <span data-i18n="bilingualTitle2">Bilingual</span>
+          </span>
+          <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="menu-row" data-open="panelExtras">
+          <span class="menu-left">
+            <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/></svg>
+            <span data-i18n="extrasTitle">Extras</span><span class="beta-badge" data-i18n="experimental">Experimental</span>
           </span>
           <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -270,16 +486,18 @@
     <div class="view-panel" id="panelExclude">
       <div class="panel-head">
         <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <span class="panel-title">Exclude areas</span>
+        <span class="panel-title" data-i18n="translateAreas">Translate areas</span>
+        <span class="save-hint" data-panel-hint></span>
       </div>
       <div class="panel-body">
+        <div class="hint" data-i18n="translateAreasIntro">Turn a section off to leave it in the original Chinese.</div>
         <section class="card">
-          <div class="row"><span class="row-label">Page UI</span><label class="switch" aria-label="Page UI"><input type="checkbox" id="areaPage" /><span class="slider"></span></label></div>
-          <div class="row"><span class="row-label">Comments</span><label class="switch" aria-label="Comments"><input type="checkbox" id="areaComments" /><span class="slider"></span></label></div>
-          <div class="row"><span class="row-label">Dynamic feed</span><label class="switch" aria-label="Dynamic feed"><input type="checkbox" id="areaDynamic" /><span class="slider"></span></label></div>
-          <div class="row"><span class="row-label">Danmaku</span><label class="switch" aria-label="Danmaku"><input type="checkbox" id="areaDanmaku" /><span class="slider"></span></label></div>
-          <div class="row"><span class="row-label">Captions</span><label class="switch" aria-label="Captions"><input type="checkbox" id="areaCaptions" /><span class="slider"></span></label></div>
-          <div class="row"><span class="row-label">Member / Creator area</span><label class="switch" aria-label="Member / Creator area"><input type="checkbox" id="areaCreatorPages" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="pageUI">Page UI</span><label class="switch" aria-label="Page UI"><input type="checkbox" id="areaPage" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="comments">Comments</span><label class="switch" aria-label="Comments"><input type="checkbox" id="areaComments" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="dynamicFeed">Dynamic feed</span><label class="switch" aria-label="Dynamic feed"><input type="checkbox" id="areaDynamic" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="danmaku">Danmaku</span><label class="switch" aria-label="Danmaku"><input type="checkbox" id="areaDanmaku" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="captions">Captions</span><label class="switch" aria-label="Captions"><input type="checkbox" id="areaCaptions" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="creatorArea">Member / Creator area</span><label class="switch" aria-label="Member / Creator area"><input type="checkbox" id="areaCreatorPages" /><span class="slider"></span></label></div>
         </section>
       </div>
     </div>
@@ -288,38 +506,72 @@
     <div class="view-panel" id="panelBilingual">
       <div class="panel-head">
         <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <span class="panel-title">Bilingual per area</span>
+        <span class="panel-title" data-i18n="bilingualTitle2">Bilingual</span>
+        <span class="save-hint" data-panel-hint></span>
       </div>
       <div class="panel-body">
-        <section class="card">
-          <div class="row"><span class="row-label">Page UI</span><select id="bilingualPage"></select></div>
-          <div class="row"><span class="row-label">Comments</span><select id="bilingualComments"></select></div>
-          <div class="row"><span class="row-label">Dynamic feed</span><select id="bilingualDynamic"></select></div>
-          <div class="row"><span class="row-label">Danmaku</span><select id="bilingualDanmaku"></select></div>
-          <div class="row"><span class="row-label">Captions</span><select id="bilingualCaptions"></select></div>
+        <div class="hint" data-i18n="bilingualIntro">Choose what each area shows: the translation only, or the Chinese together with it.</div>
+        <section class="card dd-host">
+          <div class="row"><span class="row-label" data-i18n="pageUI">Page UI</span><span class="srv"><div class="icon-dd" id="bilingualPageDd"><button type="button" class="icon-dd-btn" id="bilingualPageDdBtn" aria-haspopup="listbox" aria-expanded="false"><span class="icon-dd-ic" id="bilingualPageDdIcon"></span><span class="icon-dd-name" id="bilingualPageDdName"></span><svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul class="icon-dd-list" id="bilingualPageDdList" role="listbox"></ul></div><select id="bilingualPage" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select></span></div>
+          <div class="row"><span class="row-label" data-i18n="comments">Comments</span><span class="srv"><div class="icon-dd" id="bilingualCommentsDd"><button type="button" class="icon-dd-btn" id="bilingualCommentsDdBtn" aria-haspopup="listbox" aria-expanded="false"><span class="icon-dd-ic" id="bilingualCommentsDdIcon"></span><span class="icon-dd-name" id="bilingualCommentsDdName"></span><svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul class="icon-dd-list" id="bilingualCommentsDdList" role="listbox"></ul></div><select id="bilingualComments" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select></span></div>
+          <div class="row"><span class="row-label" data-i18n="dynamicFeed">Dynamic feed</span><span class="srv"><div class="icon-dd" id="bilingualDynamicDd"><button type="button" class="icon-dd-btn" id="bilingualDynamicDdBtn" aria-haspopup="listbox" aria-expanded="false"><span class="icon-dd-ic" id="bilingualDynamicDdIcon"></span><span class="icon-dd-name" id="bilingualDynamicDdName"></span><svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul class="icon-dd-list" id="bilingualDynamicDdList" role="listbox"></ul></div><select id="bilingualDynamic" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select></span></div>
+          <div class="row"><span class="row-label" data-i18n="danmaku">Danmaku</span><span class="srv"><div class="icon-dd" id="bilingualDanmakuDd"><button type="button" class="icon-dd-btn" id="bilingualDanmakuDdBtn" aria-haspopup="listbox" aria-expanded="false"><span class="icon-dd-ic" id="bilingualDanmakuDdIcon"></span><span class="icon-dd-name" id="bilingualDanmakuDdName"></span><svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul class="icon-dd-list" id="bilingualDanmakuDdList" role="listbox"></ul></div><select id="bilingualDanmaku" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select></span></div>
+          <div class="row"><span class="row-label" data-i18n="captions">Captions</span><span class="srv"><div class="icon-dd" id="bilingualCaptionsDd"><button type="button" class="icon-dd-btn" id="bilingualCaptionsDdBtn" aria-haspopup="listbox" aria-expanded="false"><span class="icon-dd-ic" id="bilingualCaptionsDdIcon"></span><span class="icon-dd-name" id="bilingualCaptionsDdName"></span><svg class="icon-dd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul class="icon-dd-list" id="bilingualCaptionsDdList" role="listbox"></ul></div><select id="bilingualCaptions" class="bte-hidden-select" tabindex="-1" aria-hidden="true"></select></span></div>
         </section>
+
       </div>
     </div>
 
+
+    <!-- ===== EXTRAS PANEL ===== -->
+    <div class="view-panel" id="panelExtras">
+      <div class="panel-head">
+        <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="panel-title" data-i18n="extrasTitle">Extras</span><span class="beta-badge" data-i18n="experimental">Experimental</span>
+        <span class="save-hint" data-panel-hint></span>
+      </div>
+      <div class="panel-body">
+        <div class="hint" data-i18n="extrasIntro">Still being tested. All off by default, and each can change how the page looks.</div>
+        <section class="card tip-host">
+<div class="row">
+            <span class="row-label" data-i18n="blurCaption">Blur caption until hover<span class="info"><span class="q">?</span><span class="tip" data-i18n="blurCaptionHint">Read the Chinese first, then hover the subtitle to reveal the translation.</span></span></span>
+            <label class="switch" aria-label="Blur caption translation until hover"><input type="checkbox" id="blurCaptionToggle" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="hoverTranslate">Hover to translate<span class="info"><span class="q">?</span><span class="tip" data-i18n="hoverTranslateHint">Point at any Chinese text to translate just that piece.</span></span></span>
+            <label class="switch" aria-label="Hover Chinese text to translate"><input type="checkbox" id="hoverTranslateToggle" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="fitText">Let clipped text wrap<span class="info"><span class="q">?</span><span class="tip" data-i18n="fitTextHint">Only affects text the site cuts off. Off by default because changing the page layout can look worse.</span></span></span>
+            <label class="switch" aria-label="Let clipped text wrap"><input type="checkbox" id="fitTextToggle" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="properNouns">Use official names<span class="info"><span class="q">?</span><span class="tip" data-i18n="properNounsHint">Looks up series, games and people on Wikidata so they show their real name instead of a literal translation. Only for names it is sure about.</span></span></span>
+            <label class="switch" aria-label="Use official names"><input type="checkbox" id="properNounsToggle" /><span class="slider"></span></label>
+          </div>
+        </section>
+      </div>
+    </div>
     <!-- ===== DEEPL PANEL ===== -->
     <div class="view-panel" id="panelDeepl">
       <div class="panel-head">
         <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <span class="panel-title">DeepL settings</span>
+        <span class="panel-title" data-i18n="deeplSettings">DeepL settings</span>
+        <span class="save-hint" data-panel-hint></span>
       </div>
       <div class="panel-body">
         <section class="card tip-host">
-          <div class="row"><span class="row-label">DeepL key</span><input type="password" id="deeplKey" placeholder="xxxxxxxx:fx" /></div>
-          <div class="row"><span class="row-label">Endpoint</span>
-            <select id="deeplEndpoint"><option value="auto">Auto</option><option value="free">Free</option><option value="pro">Pro</option></select>
+          <div class="row"><span class="row-label" data-i18n="deeplKey">DeepL key</span><input type="password" id="deeplKey" placeholder="xxxxxxxx:fx" /></div>
+          <div class="row"><span class="row-label" data-i18n="endpoint">Endpoint</span>
+            <select id="deeplEndpoint"><option value="auto" data-i18n="optAuto">Auto</option><option value="free" data-i18n="optFree">Free</option><option value="pro" data-i18n="optPro">Pro</option></select>
           </div>
           <div class="row">
-            <span class="row-label">Fallback to Microsoft</span>
+            <span class="row-label" data-i18n="fallbackMicrosoft">Fallback to Microsoft</span>
             <label class="switch" aria-label="Fallback to Microsoft"><input type="checkbox" id="deeplFallback" /><span class="slider"></span></label>
           </div>
           <div class="row">
-            <span class="row-label">Optimize usage
-              <span class="info"><span class="q">?</span><span class="tip">Translates subtitles only as you watch, not the whole video — saving DeepL characters. Cached and duplicate lines are never re-sent.</span></span>
+            <span class="row-label" data-i18n="optimizeUsage">Optimize usage
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="optimizeTip">Translate subtitles only as you watch them, not the whole video ahead of time. Saves API quota. Repeated and cached lines are never sent again.</span></span>
             </span>
             <label class="switch" aria-label="Optimize usage"><input type="checkbox" id="deeplOptimize" /><span class="slider"></span></label>
           </div>
@@ -327,22 +579,116 @@
       </div>
     </div>
 
+    <!-- ===== BAIDU PANEL ===== -->
+    <div class="view-panel" id="panelBaidu">
+      <div class="panel-head">
+        <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="panel-title" data-i18n="baiduSettings">Baidu settings</span>
+        <span class="save-hint" data-panel-hint></span>
+      </div>
+      <div class="panel-body">
+        <section class="card tip-host">
+          <div class="row"><span class="row-label" data-i18n="appId">App ID</span><input type="text" id="baiduAppid" placeholder="App ID" data-i18n-ph="appId" autocomplete="off" spellcheck="false" /></div>
+          <div class="row"><span class="row-label" data-i18n="secretKey">Secret key</span><input type="password" id="baiduSecret" placeholder="Secret key" data-i18n-ph="secretKey" autocomplete="off" /></div>
+          <div class="row">
+            <span class="row-label" data-i18n="optimizeUsage">Optimize usage
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="optimizeTip">Translate subtitles only as you watch them, not the whole video ahead of time. Saves API quota. Repeated and cached lines are never sent again.</span></span>
+            </span>
+            <label class="switch" aria-label="Optimize usage"><input type="checkbox" id="baiduOptimize" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="fallbackIfFails">Fall back if it fails
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="baiduFallbackTip">If Baidu is unavailable, quietly try Youdao, then Microsoft and Google, so text still gets translated.</span></span>
+            </span>
+            <label class="switch" aria-label="Fall back if it fails"><input type="checkbox" id="baiduFallback" /><span class="slider"></span></label>
+          </div>
+        </section>
+        <div class="note" data-i18n="baiduNote">Get a key from the General Translation API console at fanyi-api.baidu.com, then paste the App ID and Secret key.</div>
+      </div>
+    </div>
+
+    <!-- ===== YOUDAO PANEL ===== -->
+    <div class="view-panel" id="panelYoudao">
+      <div class="panel-head">
+        <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="panel-title" data-i18n="youdaoSettings">Youdao settings</span>
+        <span class="save-hint" data-panel-hint></span>
+      </div>
+      <div class="panel-body">
+        <section class="card tip-host">
+          <div class="row"><span class="row-label" data-i18n="appKey">App key</span><input type="text" id="youdaoAppKey" placeholder="App key" data-i18n-ph="appKey" autocomplete="off" spellcheck="false" /></div>
+          <div class="row"><span class="row-label" data-i18n="appSecret">App secret</span><input type="password" id="youdaoAppSecret" placeholder="App secret" data-i18n-ph="appSecret" autocomplete="off" /></div>
+          <div class="row">
+            <span class="row-label" data-i18n="optimizeUsage">Optimize usage
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="optimizeTip">Translate subtitles only as you watch them, not the whole video ahead of time. Saves API quota. Repeated and cached lines are never sent again.</span></span>
+            </span>
+            <label class="switch" aria-label="Optimize usage"><input type="checkbox" id="youdaoOptimize" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="fallbackIfFails">Fall back if it fails
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="youdaoFallbackTip">If Youdao is unavailable, quietly try Baidu, then Microsoft and Google, so text still gets translated.</span></span>
+            </span>
+            <label class="switch" aria-label="Fall back if it fails"><input type="checkbox" id="youdaoFallback" /><span class="slider"></span></label>
+          </div>
+        </section>
+        <div class="note" data-i18n="youdaoNote">Get a key from a Text Translation app at ai.youdao.com, then paste the App key and App secret.</div>
+      </div>
+    </div>
+
+    <!-- ===== PAPAGO PANEL ===== -->
+    <div class="view-panel" id="panelPapago">
+      <div class="panel-head">
+        <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span class="panel-title" data-i18n="papagoSettings">Papago settings</span>
+        <span class="save-hint" data-panel-hint></span>
+      </div>
+      <div class="panel-body">
+        <section class="card tip-host">
+          <div class="row"><span class="row-label" data-i18n="clientId">Client ID</span><input type="text" id="papagoClientId" placeholder="Client ID" data-i18n-ph="clientId" autocomplete="off" spellcheck="false" /></div>
+          <div class="row"><span class="row-label" data-i18n="clientSecret">Client secret</span><input type="password" id="papagoClientSecret" placeholder="Client secret" data-i18n-ph="clientSecret" autocomplete="off" /></div>
+          <div class="row">
+            <span class="row-label" data-i18n="optimizeUsage">Optimize usage
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="optimizeTip">Translate subtitles only as you watch them, not the whole video ahead of time. Saves API quota. Repeated and cached lines are never sent again.</span></span>
+            </span>
+            <label class="switch" aria-label="Optimize usage"><input type="checkbox" id="papagoOptimize" /><span class="slider"></span></label>
+          </div>
+          <div class="row">
+            <span class="row-label" data-i18n="fallbackIfFails">Fall back if it fails
+              <span class="info"><span class="q">?</span><span class="tip" data-i18n="papagoFallbackTip">If Papago is unavailable, quietly try Microsoft, Google, then DeepL, so text still gets translated.</span></span>
+            </span>
+            <label class="switch" aria-label="Fall back if it fails"><input type="checkbox" id="papagoFallback" /><span class="slider"></span></label>
+          </div>
+        </section>
+        <div class="note" data-i18n="papagoNote">Get a Client ID and Client secret from the Naver Cloud console (AI Services, Papago Translation). Strong for Korean and other Asian languages.</div>
+      </div>
+    </div>
+
     <!-- ===== SETTINGS PANEL ===== -->
     <div class="view-panel" id="panelSettings">
       <div class="panel-head">
         <button class="iconbtn" data-close aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <span class="panel-title">Settings</span>
+        <span class="panel-title" data-i18n="settings">Settings</span>
+        <span class="save-hint" data-panel-hint></span>
       </div>
       <div class="panel-body">
         <section class="card">
-          <div class="row"><span class="row-label">Enable cache</span><label class="switch" aria-label="Enable cache"><input type="checkbox" id="cacheEnabled" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="enableCache">Enable cache</span><label class="switch" aria-label="Enable cache"><input type="checkbox" id="cacheEnabled" /><span class="slider"></span></label></div>
+          <div class="row"><span class="row-label" data-i18n="savedTranslations">Saved translations</span><span class="row-value" id="cacheCount">0</span></div>
+          <div class="row"><span class="row-label" data-i18n="cacheSize">Cache size</span><span class="row-value" id="cacheSize">0 KB</span></div>
           <div class="row">
-            <span class="row-label">Dark mode</span>
+            <span class="row-label" data-i18n="darkMode">Dark mode</span>
             <label class="switch" aria-label="Dark mode"><input type="checkbox" id="darkModeToggle" /><span class="slider"></span></label>
           </div>
         </section>
-        <button class="clear-btn" id="clearCacheBtn">Clear translation cache</button>
-        <button class="text-btn" id="docsBtn">Documentation</button>
+        <button class="clear-btn" id="clearCacheBtn" data-i18n="clearCache">Clear translation cache</button>
+
+        <div class="card-title" data-i18n="aboutTitle">About</div>
+        <section class="card">
+          <div class="row"><span class="row-label" data-i18n="versionLabel">Version</span><span class="row-value" id="aboutVersion">2.0.7</span></div>
+          <div class="row"><span class="row-label" data-i18n="installedFrom">Installed from</span><span class="row-value" id="installSource">-</span></div>
+        </section>
+        <button class="text-btn" id="checkUpdatesBtn" data-i18n="checkUpdates">Check for updates</button>
+        <button class="text-btn" id="docsBtn" data-i18n="documentation">Documentation</button>
         <button class="text-btn update" id="updateBtn" style="display:none;">Update available</button>
         <div class="footer-note upd" id="updateStatus" style="margin-top:8px;"></div>
       </div>
@@ -350,8 +696,25 @@
   </div>
 
   <!-- ===== floating bottom bar ===== -->
+  <!-- ===== error modal ===== -->
+  <div class="modal-back" id="errModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="errModalTitle">
+      <div class="modal-head">
+        <span class="mi"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1.1" fill="currentColor"/></svg></span>
+        <span class="modal-title" id="errModalTitle" data-i18n="errTitle">Translation problem</span>
+      </div>
+      <div class="modal-body">
+        <span id="errModalMsg"></span>
+        <div class="modal-code" id="errModalCode"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="primary" id="errModalCopy" data-i18n="errCopy">Copy details</button>
+        <button class="ghost" id="errModalClose" data-i18n="errClose">Close</button>
+      </div>
+    </div>
+  </div>
   <footer class="bottombar">
-    <button class="foot-btn" id="settingsBtn" data-open="panelSettings">
+    <button class="foot-btn" id="settingsBtn" data-open="panelSettings" data-i18n="settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       Settings
     </button>
@@ -359,7 +722,7 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.94.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
       GitHub
     </button>
-    <span class="ver" id="appVersion">v2.0.5</span>
+    <span class="ver-wrap" id="verWrap"><span class="ver" id="appVersion">v2.0.7</span><span class="ver-arrow" id="verArrow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="ver-new" id="verNew"></span></span>
   </footer>
 
   <script src="languages/en.js"></script>
@@ -368,8 +731,13 @@
   <script src="languages/ru.js"></script>
   <script src="languages/vi.js"></script>
   <script src="languages/id.js"></script>
+  <script src="languages/ko.js"></script>
+  <script src="languages/th.js"></script>
+  <script src="languages/pt.js"></script>
+  <script src="languages/es.js"></script>
   <script src="languages/languageManager.js"></script>
   <script src="settings/Settings.js"></script>
+  <script src="languages/popupI18n.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

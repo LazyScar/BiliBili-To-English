@@ -1,10 +1,6 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   class GoogleEngine {
     constructor() {
       this.name = "google";
@@ -17,35 +13,23 @@
       this.separator = "\n<<<BTE_SPLIT_TOKEN>>>\n";
       this.fallbackConcurrency = 6;
       this.lastRequestAt = 0;
-      this.chain = Promise.resolve();
     }
 
-    // The free gtx endpoint rate-limits aggressively (HTTP 429). Hammering it on every
-    // failure just deepens the throttle and yields empty/garbled output. Back off
-    // exponentially on 429/5xx and recover immediately on the first success.
+    // The free gtx endpoint rate-limits aggressively (HTTP 429). Pacing is AIMD (see
+    // RateGovernor): back off fast on a 429, recover gradually so the request rate settles just
+    // under the limit instead of snapping to full speed and re-tripping it.
     noteRateLimited() {
-      this.consecutiveFailures = Math.min(this.consecutiveFailures + 1, 5);
-      this.minIntervalMs = Math.min(this.maxIntervalMs, this.baseIntervalMs * 2 ** this.consecutiveFailures);
+      (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
 
     noteSuccess() {
-      if (this.consecutiveFailures === 0) return;
-      this.consecutiveFailures = 0;
-      this.minIntervalMs = this.baseIntervalMs;
+      (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    schedule(task) {
-      const run = this.chain.then(async () => {
-        const elapsed = Date.now() - this.lastRequestAt;
-        const waitMs = Math.max(0, this.minIntervalMs - elapsed);
-        if (waitMs > 0) {
-          await sleep(waitMs);
-        }
-        this.lastRequestAt = Date.now();
-        return task();
-      });
-      this.chain = run.catch(() => {});
-      return run;
+    // Paced, priority-aware scheduling is shared across all engines (see RateGovernor.schedule):
+    // higher-priority (caption) tasks run ahead of page text when the pacing gate opens.
+    schedule(task, priority) {
+      return ROOT.RateGovernor.schedule(this, task, priority);
     }
 
     buildGroups(texts) {
@@ -77,11 +61,13 @@
       }
       const targetLanguage = options?.targetLanguage || "en";
       const sourceLanguage = options?.sourceLanguage || "auto";
+      const priority = options?.priority;
       const groups = this.buildGroups(texts);
       const output = [];
       for (const group of groups) {
-        const translatedGroup = await this.schedule(() =>
-          this.translateGroup(group, sourceLanguage, targetLanguage)
+        const translatedGroup = await this.schedule(
+          () => this.translateGroup(group, sourceLanguage, targetLanguage),
+          priority
         );
         output.push(...translatedGroup);
       }
@@ -166,18 +152,23 @@
       // (iframes, workers) where direct fetch to translate.googleapis.com is blocked.
       try {
         const bg = await new Promise((resolve, reject) => {
-          if (!chrome?.runtime?.sendMessage) {
+          const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
+          if (!alive || !chrome.runtime.sendMessage) {
             reject(new Error("runtime unavailable"));
             return;
           }
-          chrome.runtime.sendMessage(
-            { type: "bte:bgFetch", payload: { url, method: "GET", credentials: "omit" } },
-            (response) => {
-              const err = chrome.runtime.lastError;
-              if (err) { reject(new Error(err.message || "runtime error")); return; }
-              resolve(response);
-            }
-          );
+          try {
+            chrome.runtime.sendMessage(
+              { type: "bte:bgFetch", payload: { url, method: "GET", credentials: "omit" } },
+              (response) => {
+                const err = chrome.runtime.lastError;
+                if (err) { reject(new Error(err.message || "runtime error")); return; }
+                resolve(response);
+              }
+            );
+          } catch (error) {
+            reject(error);
+          }
         });
         if (bg?.ok && bg.text) {
           const data = JSON.parse(bg.text);
@@ -188,7 +179,11 @@
           this.noteRateLimited();
         }
       } catch (error) {
-        console.warn("BTE Google translate failed:", error);
+        // Stay silent once the extension context is gone — the page just needs a reload, and
+        // logging here is what floods chrome://extensions after every extension reload/update.
+        if (ROOT.isExtensionAlive && ROOT.isExtensionAlive()) {
+          console.warn("BTE Google translate failed:", error);
+        }
       }
       return null;
     }

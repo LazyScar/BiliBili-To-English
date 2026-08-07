@@ -1,33 +1,67 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   class DeepLEngine {
     constructor() {
       this.name = "deepl";
+      // DeepL is paced at a fixed interval (no AIMD). baseIntervalMs === minIntervalMs keeps the
+      // shared scheduler's jitter at zero, so its steady 350 ms spacing is never perturbed.
+      this.baseIntervalMs = 350;
       this.minIntervalMs = 350;
       this.maxItemsPerRequest = 50;
       this.maxCharsPerRequest = 110_000;
       this.lastRequestAt = 0;
-      this.chain = Promise.resolve();
       this.lastError = null;
     }
 
-    schedule(task) {
-      const run = this.chain.then(async () => {
-        const elapsed = Date.now() - this.lastRequestAt;
-        const waitMs = Math.max(0, this.minIntervalMs - elapsed);
-        if (waitMs > 0) {
-          await sleep(waitMs);
+    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
+    schedule(task, priority) {
+      return ROOT.RateGovernor.schedule(this, task, priority);
+    }
+
+    // Background worker first (the only context with cross-origin privileges in MV3).
+    async request(url, init) {
+      const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : true;
+      if (alive && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        try {
+          const bg = await new Promise((resolve, reject) => {
+            try {
+              chrome.runtime.sendMessage(
+                {
+                  type: "bte:bgFetch",
+                  payload: {
+                    url,
+                    method: init?.method || "GET",
+                    headers: init?.headers || {},
+                    body: init?.body,
+                    credentials: "omit",
+                  },
+                },
+                (response) => {
+                  const err = chrome.runtime.lastError;
+                  if (err) { reject(new Error(err.message || "runtime error")); return; }
+                  resolve(response);
+                }
+              );
+            } catch (error) {
+              reject(error);
+            }
+          });
+          if (bg) {
+            return {
+              ok: !!bg.ok,
+              status: Number(bg.status || 0),
+              statusText: String(bg.statusText || ""),
+              text: String(bg.text || ""),
+            };
+          }
+        } catch (_error) {
+          /* fall through to a direct fetch */
         }
-        this.lastRequestAt = Date.now();
-        return task();
-      });
-      this.chain = run.catch(() => {});
-      return run;
+      }
+      const response = await fetch(url, init);
+      const text = await response.text();
+      return { ok: response.ok, status: response.status, statusText: response.statusText, text };
     }
 
     resolveEndpoint(mode, key) {
@@ -101,16 +135,19 @@
       const sourceLang = options?.sourceLanguage && options.sourceLanguage !== "auto"
         ? this.toDeepLLang(options.sourceLanguage)
         : null;
+      const priority = options?.priority;
       const groups = this.buildGroups(texts);
       const output = [];
       for (const group of groups) {
-        const translated = await this.schedule(() =>
-          this.translateGroup(group, {
-            endpoint,
-            key,
-            targetLang,
-            sourceLang,
-          })
+        const translated = await this.schedule(
+          () =>
+            this.translateGroup(group, {
+              endpoint,
+              key,
+              targetLang,
+              sourceLang,
+            }),
+          priority
         );
         output.push(...translated);
       }
@@ -125,21 +162,33 @@
         body.append("source_lang", context.sourceLang);
       }
       try {
-        const response = await fetch(context.endpoint, {
+        // MV3 content scripts do NOT inherit cross-origin privileges, so a direct fetch here is
+        // CORS-blocked. Every engine must go through the background worker.
+        const response = await this.request(context.endpoint, {
           method: "POST",
           headers: {
             Authorization: `DeepL-Auth-Key ${context.key}`,
             "Content-Type": "application/x-www-form-urlencoded",
           },
-          body,
+          body: body.toString(),
         });
-        const data = await response.json().catch(() => ({}));
+        let data = {};
+        try {
+          data = response.text ? JSON.parse(response.text) : {};
+        } catch (_error) {
+          data = {};
+        }
         if (!response.ok) {
           const message = data?.message || `DeepL request failed (${response.status})`;
           this.lastError = message;
-          console.warn("BTE DeepL error:", message);
-          // Throw so the manager falls back (to Microsoft) and doesn't negative-cache a fetch failure.
-          throw new Error(message);
+          // Silent once the extension context is gone — otherwise every batch logs after a reload.
+          if (!ROOT.isExtensionAlive || ROOT.isExtensionAlive()) {
+            console.warn("BTE DeepL error:", message);
+          }
+          // Throw so the manager falls back (to Microsoft) and doesn't negative-cache a fetch
+          // failure. Carrying the HTTP status marks it a SOFT error (handled by fallback/backoff)
+          // rather than a hard "internet is down" signal.
+          throw Object.assign(new Error(message), { status: response.status || undefined });
         }
         const translations = Array.isArray(data?.translations) ? data.translations : [];
         return texts.map((input, index) => {
@@ -149,7 +198,11 @@
         });
       } catch (error) {
         this.lastError = String(error && error.message ? error.message : error);
-        console.warn("BTE DeepL translate failed:", error);
+        // Silent once the extension context is gone, and left to the manager's throttled logging
+        // otherwise, so a persistent failure can't flood the console once per batch.
+        if (!ROOT.isExtensionAlive || ROOT.isExtensionAlive()) {
+          console.warn("BTE DeepL translate failed:", error);
+        }
         throw error;
       }
     }

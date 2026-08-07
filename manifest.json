@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": [
@@ -18,7 +18,16 @@
     "https://api-free.deepl.com/*",
     "https://edge.microsoft.com/*",
     "https://api.cognitive.microsofttranslator.com/*",
-    "https://api.github.com/*"
+    "https://www.bing.com/*",
+    "https://cn.bing.com/*",
+    "https://translate.yandex.com/*",
+    "https://translate.yandex.ru/*",
+    "https://translate.yandex.net/*",
+    "https://fanyi-api.baidu.com/*",
+    "https://openapi.youdao.com/*",
+    "https://naveropenapi.apigw.ntruss.com/*",
+    "https://api.github.com/*",
+    "https://www.wikidata.org/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -30,7 +39,9 @@
   },
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "icons": {
     "16": "icon16.png",
@@ -50,11 +61,21 @@
         "languages/ru.js",
         "languages/vi.js",
         "languages/id.js",
+        "languages/ko.js",
+        "languages/th.js",
+        "languages/pt.js",
+        "languages/es.js",
         "languages/languageManager.js",
         "settings/Settings.js",
+        "translation/engines/throttle.js",
         "translation/engines/google.js",
         "translation/engines/deepl.js",
         "translation/engines/microsoft.js",
+        "translation/engines/yandex.js",
+        "translation/engines/baidu.js",
+        "translation/engines/youdao.js",
+        "translation/engines/papago.js",
+        "translation/properNouns.js",
         "translation/TranslationManager.js",
         "dom/DomTranslator.js",
         "captions/CaptionManager.js",
@@ -64,12 +85,23 @@
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://*.bilibili.com/*",
+        "http://*.bilibili.com/*"
+      ],
+      "js": [
+        "captions/subtitleBridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "browser_specific_settings": {
     "gecko": {
       "id": "bilibili-translator@bilibili.com",
-      "strict_min_version": "127.0",
+      "strict_min_version": "128.0",
       "data_collection_permissions": {
         "required": [
           "websiteContent"

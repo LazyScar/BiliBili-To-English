@@ -130,9 +130,17 @@
       this.running = false;
       this.observers = new Set();
       this.observedRoots = new WeakSet();
+      // Far off-screen text is deferred until it nears the viewport.
+      this.lazyObserver = null;
+      this.lazyObserved = new WeakSet();
       this.pendingNodes = new Set();
       this.flushScheduled = false;
       this.flushInProgress = false;
+      // Dispatch runs off the flush lock so new DOM isn't blocked by an in-flight round-trip.
+      // Each dispatch takes a disjoint job snapshot, so overlap is safe.
+      this._activeDispatches = 0;
+      this._maxConcurrentDispatches = 4;
+      this.dispatchPending = false;
       this.textJobs = [];
       this.attrJobs = [];
       this.textState = new Map();
@@ -140,7 +148,12 @@
       this.commentPoll = null;
       this.rescanPoll = null;
       this.stylesInjected = false;
-      this.maxNodesPerFlush = 140;
+      // Nodes per DOM pass, scaled by device tier and then tuned by _adaptFlushSize().
+      const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
+      this.maxNodesPerFlush = cores <= 2 ? 70 : cores <= 4 ? 140 : cores <= 8 ? 200 : 260;
+      // Viewports of off-screen content to pre-translate. Shared by the priority buckets and the
+      // lazy observer margin so they stay in sync.
+      this._aheadViewports = cores <= 2 ? 1 : cores <= 4 ? 2 : cores <= 8 ? 3 : 4;
       this._flushDurationSamples = [];
       this.cleanupCounter = 0;
       this.spacingNodes = new Set();
@@ -156,6 +169,10 @@
       this.creatorGateStartedAt = 0;
       this.creatorGateUrl = "";
       this.handleMutations = this.handleMutations.bind(this);
+      // Hover-to-translate (learning aid): translate just the Chinese text under the pointer.
+      this.handleHover = this.handleHover.bind(this);
+      this.hoverBound = false;
+      this.hoverPending = new WeakSet();
       this.titleObserver = null;
       this.titleOriginal = "";
       this.titleInjected = "";
@@ -167,6 +184,7 @@
     }
 
     updateSettings(nextSettings) {
+      const prevLanguage = this.settings && this.settings.targetLanguage;
       this.settings = nextSettings;
       if (!this.settings.enabled || this.isRouteExcluded()) {
         this.stop({ restore: true });
@@ -176,8 +194,125 @@
         this.start();
         return;
       }
+      this.syncHoverBinding();
       this.beginCreatorLayoutGate();
+      // A TreeWalker never crosses shadow boundaries, so a plain body queue would leave shadow
+      // content in the old language. On a language change, rescan every root explicitly.
+      if (prevLanguage && prevLanguage !== this.settings.targetLanguage) {
+        // Retranslate straight from each node's SAVED raw original (visible first), then do the
+        // full rescan for shadow DOM / not-yet-seen content. This flips the on-screen text to the
+        // new language almost immediately instead of waiting to re-walk and re-detect the page.
+        this.retranslateFromSavedOriginals();
+        this.queueFullRescan();
+      } else {
+        this.queueNode(document.body);
+      }
+    }
+
+    // Re-translate from each node's saved raw original instead of re-walking the DOM and
+    // re-detecting the old language. Visible text flips first.
+    retranslateFromSavedOriginals() {
+      if (!this.canRun()) return;
+      const language = this.settings.targetLanguage;
+      this.textState.forEach((state, node) => {
+        if (!node || !node.isConnected || !node.parentElement) return;
+        const source = (state.original || "").trim();
+        if (!source) return;
+        if (this.shouldSkipElement(node.parentElement)) return;
+        const area = this.detectArea(node.parentElement);
+        if (!this.isAreaEnabled(area) || area === "captions") return;
+        if (this.shouldSkipText(source, node.parentElement)) return;
+        const mode = modeFromSettings(this.settings, area);
+        const titleCase = this.isLikelyTagElement(node.parentElement);
+        if (
+          state.lastSource === source &&
+          state.lastLanguage === language &&
+          state.lastMode === mode &&
+          this.isStateApplied(node, state, mode)
+        ) {
+          return; // already showing this source in the new language
+        }
+        state.inflightSig = "";
+        if (language === "en") {
+          const relative = this.localizeRelativeTime(source);
+          if (relative) {
+            this.applyTextMode(node, state, source, relative, mode);
+            state.lastSource = source; state.lastLanguage = language; state.lastMode = mode;
+            this.recordSpacingParent(node);
+            return;
+          }
+        }
+        const quick = this.translationManager.peekCached(source, { targetLanguage: language, area, titleCase });
+        if (quick.translation) {
+          this.applyTextMode(node, state, source, quick.translation, mode);
+          state.lastSource = source; state.lastLanguage = language; state.lastMode = mode;
+          this.recordSpacingParent(node);
+          return;
+        }
+        if (quick.fromCache && !quick.translation) {
+          this.removeBilingualNode(state);
+          if (state.applied && node.nodeValue !== state.original) node.nodeValue = state.original;
+          state.applied = false; state.injectedValue = "";
+          state.lastSource = source; state.lastLanguage = language; state.lastMode = mode;
+          return;
+        }
+        state.requestId = (state.requestId || 0) + 1;
+        state.inflightSig = `${language}::${mode}::${source}`;
+        this.textJobs.push({
+          node, area, mode, source, language, titleCase,
+          priority: this.getPriorityBucket(node.parentElement), requestId: state.requestId,
+        });
+      });
+      this.attrState.forEach((bucket, element) => {
+        if (!element || !element.isConnected || this.shouldSkipElement(element)) return;
+        const area = this.detectArea(element);
+        if (!this.isAreaEnabled(area)) return;
+        const titleCase = this.isLikelyTagElement(element);
+        ATTRS.forEach((attr) => {
+          const source = bucket.original[attr];
+          if (!source || this.shouldSkipText(source, element)) return;
+          if (bucket.lastSource[attr] === source && bucket.lastLanguage[attr] === language && bucket.applied[attr]) return;
+          const quick = this.translationManager.peekCached(source, { targetLanguage: language, area, titleCase });
+          if (quick.translation) {
+            if (element.getAttribute(attr) !== quick.translation) element.setAttribute(attr, quick.translation);
+            bucket.applied[attr] = quick.translation; bucket.lastSource[attr] = source; bucket.lastLanguage[attr] = language;
+            return;
+          }
+          bucket.requestIds[attr] = (bucket.requestIds[attr] || 0) + 1;
+          bucket.inflight[attr] = `${language}::${source}`;
+          this.attrJobs.push({
+            element, attr, area, source, language, titleCase,
+            priority: this.getPriorityBucket(element), requestId: bucket.requestIds[attr],
+          });
+        });
+      });
+      this.dispatchTranslations();
+    }
+
+    // observeRoot won't re-queue an already-observed root, so queue each explicitly.
+    queueFullRescan() {
       this.queueNode(document.body);
+      try {
+        document.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot) {
+            this.observeRoot(el.shadowRoot);
+            this.queueNode(el.shadowRoot);
+          }
+          if (el.tagName === "IFRAME") this.observeIFrame(el);
+          if (el.tagName === "MICRO-APP") this.observeMicroApp(el);
+        });
+      } catch (_error) {
+        /* querySelectorAll can throw on exotic documents — ignore */
+      }
+      this.observeMicroApps();
+      try {
+        const app = document.getElementById("commentapp");
+        const biliComments =
+          (app ? app.querySelector("bili-comments") : null) || document.querySelector("bili-comments");
+        if (biliComments) this.queueNode(biliComments.shadowRoot || biliComments);
+      } catch (_error) {
+        /* comments component not present — ignore */
+      }
     }
 
     isCreatorRoute() {
@@ -268,6 +403,8 @@
       }
       if (this.running) return;
       this.running = true;
+      this.setupLazyObserver();
+      this.syncHoverBinding();
       this.observeRoot(document.body);
       document.querySelectorAll("*").forEach((el) => {
         if (el.shadowRoot) {
@@ -289,14 +426,135 @@
       this.translatePageTitle();
     }
 
+    setupLazyObserver() {
+      if (this.lazyObserver || typeof IntersectionObserver === "undefined") return;
+      // Kept in sync with the priority-bucket "near" threshold so a fired element is always
+      // eligible and never re-deferred.
+      const vh = window.innerHeight || 800;
+      const aheadPx = Math.round(vh * this._aheadViewports);
+      const rootMargin = `${Math.round(vh * 0.5)}px 0px ${aheadPx}px 0px`;
+      this.lazyObserver = new IntersectionObserver(
+        (entries) => {
+          if (!this.canRun()) return;
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            this.lazyObserver.unobserve(entry.target);
+            this.lazyObserved.delete(entry.target);
+            this.queueNode(entry.target);
+          });
+        },
+        { rootMargin }
+      );
+    }
+
+    // Translated text runs longer than the Chinese it replaces, so a box sized for Chinese can
+    // clip it. Measured per element (never a blanket restyle), batched into one rAF layout read.
+    queueOverflowFit(element) {
+      if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+      if (!this._fitQueue) this._fitQueue = new Set();
+      this._fitQueue.add(element);
+      if (this._fitScheduled) return;
+      this._fitScheduled = true;
+      const run = () => {
+        this._fitScheduled = false;
+        const queue = this._fitQueue;
+        this._fitQueue = new Set();
+        if (!this.canRun()) return;
+        queue.forEach((el) => this.applyOverflowFit(el));
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+      else setTimeout(run, 16);
+    }
+
+    applyOverflowFit(el) {
+      if (!el || !el.isConnected) return;
+      el.classList.remove("bte-fit-wrap");
+      // Opt-in: auto-restyling translated text made most of the page look worse.
+      if (!this.settings?.learn?.fitText) return;
+      // clientWidth 0 means it isn't laid out (hidden menu) — skip; it gets re-checked when shown.
+      if (!el.clientWidth) return;
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      // Only relax elements the site itself truncates; visible overflow is left alone.
+      let style = null;
+      try {
+        style = window.getComputedStyle(el);
+      } catch (_error) {
+        return;
+      }
+      const clipped =
+        style.textOverflow === "ellipsis" ||
+        style.overflowX === "hidden" ||
+        style.whiteSpace === "nowrap";
+      if (!clipped) return;
+      el.classList.add("bte-fit-wrap");
+    }
+
+    // Bound only while enabled, so there is no cost when the feature is off.
+    syncHoverBinding() {
+      const want = !!(this.settings && this.settings.learn && this.settings.learn.hoverTranslate);
+      if (want && !this.hoverBound) {
+        document.addEventListener("mouseover", this.handleHover, { passive: true, capture: true });
+        this.hoverBound = true;
+      } else if (!want && this.hoverBound) {
+        document.removeEventListener("mouseover", this.handleHover, { capture: true });
+        this.hoverBound = false;
+      }
+    }
+
+    handleHover(event) {
+      if (!this.canRun()) return;
+      if (!this.settings?.learn?.hoverTranslate) return;
+      const el = event.target;
+      if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+      if (this.hoverPending.has(el)) return;
+      if (this.shouldSkipElement(el)) return;
+      // Only leaf-ish elements, so we translate the phrase you're on and not a whole container.
+      if (el.childElementCount > 0) return;
+      const textNode = Array.from(el.childNodes).find(
+        (n) => n.nodeType === Node.TEXT_NODE && /[一-鿿]/.test(n.nodeValue || "")
+      );
+      if (!textNode) return;
+      const state = this.ensureTextState(textNode);
+      // Already showing a translation for this text — nothing to do.
+      if (state.applied && state.translation) return;
+      this.hoverPending.add(el);
+      this.processTextNode(textNode, { force: true });
+      // processTextNode defers far off-screen text; a hovered element is by definition visible, so
+      // dispatch immediately for an instant result.
+      this.dispatchTranslations();
+    }
+
+    // Defer a far off-screen element: translate it only once it nears the viewport.
+    observeLazy(element) {
+      if (!this.lazyObserver || !element || element.nodeType !== Node.ELEMENT_NODE) return;
+      if (this.lazyObserved.has(element)) return;
+      this.lazyObserved.add(element);
+      try {
+        this.lazyObserver.observe(element);
+      } catch (_error) {
+        this.lazyObserved.delete(element);
+      }
+    }
+
     stop(options) {
       const restore = !!options?.restore;
       this.running = false;
       this.observers.forEach((observer) => observer.disconnect());
       this.observers.clear();
       this.observedRoots = new WeakSet();
+      if (this.lazyObserver) {
+        this.lazyObserver.disconnect();
+        this.lazyObserver = null;
+      }
+      this.lazyObserved = new WeakSet();
+      if (this.hoverBound) {
+        document.removeEventListener("mouseover", this.handleHover, { capture: true });
+        this.hoverBound = false;
+      }
+      this.hoverPending = new WeakSet();
       this.pendingNodes.clear();
       this.flushScheduled = false;
+      this.dispatchPending = false;
       this.textJobs = [];
       this.attrJobs = [];
       if (this.commentPoll) {
@@ -665,9 +923,10 @@
         this._flushDurationSamples.shift();
       }
       const avg = this._flushDurationSamples.reduce((a, b) => a + b, 0) / this._flushDurationSamples.length;
-      // Fast PC (flush < 30ms): increase batch; slow PC (flush > 100ms): reduce batch
-      if (avg < 30 && this.maxNodesPerFlush < 300) {
-        this.maxNodesPerFlush = Math.min(300, this.maxNodesPerFlush + 20);
+      // Fast PC (flush < 30ms): increase batch for smoother, larger waves; slow PC (flush >
+      // 100ms): reduce batch to protect responsiveness.
+      if (avg < 30 && this.maxNodesPerFlush < 400) {
+        this.maxNodesPerFlush = Math.min(400, this.maxNodesPerFlush + 30);
       } else if (avg > 100 && this.maxNodesPerFlush > 40) {
         this.maxNodesPerFlush = Math.max(40, this.maxNodesPerFlush - 20);
       }
@@ -691,7 +950,6 @@
         for (let i = limit; i < nodes.length; i += 1) {
           this.pendingNodes.add(nodes[i]);
         }
-        await this.processQueuedTranslations();
         this.cleanupCounter += 1;
         if (this.cleanupCounter % 20 === 0) {
           this.pruneStateMaps();
@@ -700,9 +958,32 @@
         this.flushInProgress = false;
         this._adaptFlushSize(Date.now() - t0);
       }
-      if (this.pendingNodes.size || this.textJobs.length || this.attrJobs.length) {
+      // Dispatch without holding the flush lock, so new DOM is scanned immediately instead of
+      // waiting on the previous batch's round-trip.
+      this.dispatchTranslations();
+      if (this.pendingNodes.size) {
         this.scheduleFlush();
       }
+    }
+
+    dispatchTranslations() {
+      if (!this.textJobs.length && !this.attrJobs.length) return;
+      if (this._activeDispatches >= this._maxConcurrentDispatches) {
+        this.dispatchPending = true;
+        return;
+      }
+      this._activeDispatches += 1;
+      Promise.resolve()
+        .then(() => this.processQueuedTranslations())
+        .catch((error) => console.warn("BTE translation dispatch failed:", error))
+        .finally(() => {
+          this._activeDispatches -= 1;
+          // Pick up anything that queued while dispatches were saturated / in flight.
+          if ((this.dispatchPending || this.textJobs.length || this.attrJobs.length) && this.canRun()) {
+            this.dispatchPending = false;
+            this.dispatchTranslations();
+          }
+        });
     }
 
     pruneStateMaps() {
@@ -942,6 +1223,7 @@
       state.applied = true;
       state.inflightSig = "";
       this.textState.set(node, state);
+      this.queueOverflowFit(node.parentElement);
     }
 
     ensureTextState(node) {
@@ -962,13 +1244,16 @@
       return this.textState.get(node);
     }
 
-    processTextNode(node) {
+    processTextNode(node, options) {
       if (!this.canRun()) return;
       if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return;
       if (!node.isConnected) return;
       if (this.shouldSkipElement(node.parentElement)) return;
       const area = this.detectArea(node.parentElement);
-      if (!this.isAreaEnabled(area) || area === "captions") return;
+      // `force` (hover-to-translate) bypasses the per-area toggles — that is the point of the
+      // mode. Captions stay excluded either way; CaptionManager owns those.
+      const force = !!(options && options.force);
+      if ((!force && !this.isAreaEnabled(area)) || area === "captions") return;
       const mode = modeFromSettings(this.settings, area);
       const titleCase = this.isLikelyTagElement(node.parentElement);
       const state = this.ensureTextState(node);
@@ -1001,6 +1286,19 @@
         return;
       }
 
+      // Chinese relative timestamps are converted locally (instant, no engine request).
+      if (language === "en") {
+        const relative = this.localizeRelativeTime(source);
+        if (relative) {
+          this.applyTextMode(node, state, source, relative, mode);
+          state.lastSource = source;
+          state.lastLanguage = language;
+          state.lastMode = mode;
+          this.recordSpacingParent(node);
+          return;
+        }
+      }
+
       const quick = this.translationManager.peekCached(source, {
         targetLanguage: language,
         area,
@@ -1028,6 +1326,14 @@
         return;
       }
 
+      // Far off-screen and uncached: defer the request until it nears the viewport.
+      const priority = this.getPriorityBucket(node.parentElement);
+      if (priority <= 0 && this.lazyObserver) {
+        this.observeLazy(node.parentElement);
+        state.inflightSig = "";
+        return;
+      }
+
       const signature = `${language}::${mode}::${source}`;
       if (state.inflightSig === signature) {
         return;
@@ -1041,7 +1347,7 @@
         source,
         language,
         titleCase,
-        priority: this.getPriorityBucket(node.parentElement),
+        priority,
         requestId: state.requestId,
       });
     }
@@ -1150,6 +1456,28 @@
       return /(tag|tags|topic|category|chip|label|keyword|badge)/i.test(attr);
     }
 
+    // Chinese relative timestamps are converted locally: instant, and avoids one request per
+    // timestamp. English targets only.
+    localizeRelativeTime(text) {
+      const s = String(text || "").trim();
+      if (!s || s.length > 12) return null;
+      const plural = (n, unit) => `${n} ${unit}${n === "1" ? "" : "s"} ago`;
+      let m;
+      if (/^(刚刚|刚才|现在|此刻)$/.test(s)) return "just now";
+      if (/^昨天$/.test(s)) return "yesterday";
+      if (/^前天$/.test(s)) return "2 days ago";
+      if ((m = s.match(/^(\d+)\s*秒(钟)?前$/))) return plural(m[1], "second");
+      if ((m = s.match(/^(\d+)\s*分钟前$/))) return plural(m[1], "minute");
+      if ((m = s.match(/^(\d+)\s*(个?小时)前$/))) return plural(m[1], "hour");
+      if ((m = s.match(/^(\d+)\s*天前$/))) return plural(m[1], "day");
+      if ((m = s.match(/^(\d+)\s*(周|星期|个星期)前$/))) return plural(m[1], "week");
+      if ((m = s.match(/^(\d+)\s*个月前$/))) return plural(m[1], "month");
+      if ((m = s.match(/^(\d+)\s*年前$/))) return plural(m[1], "year");
+      if ((m = s.match(/^今天\s*(\d{1,2}:\d{2})$/))) return `today ${m[1]}`;
+      if ((m = s.match(/^昨天\s*(\d{1,2}:\d{2})$/))) return `yesterday ${m[1]}`;
+      return null;
+    }
+
     formatRelativeTime(text) {
       const s = String(text || "").trim();
       let date;
@@ -1184,7 +1512,10 @@
       if (diffMinutes < 1) return "just now";
       if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? "s" : ""} ago`;
       if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
-      return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+      if (diffDays === 1) return "yesterday";
+      if (diffDays < 7) return `${diffDays} days ago`;
+      const weeks = Math.floor(diffDays / 7);
+      return `${weeks} week${weeks !== 1 ? "s" : ""} ago`;
     }
 
     processTimestampElement(element) {
@@ -1297,7 +1628,10 @@
       if (vh <= 0 || vw <= 0) return 0;
       const isVisible = rect.bottom >= 0 && rect.top <= vh && rect.right >= 0 && rect.left <= vw;
       if (isVisible) return 2;
-      const near = rect.bottom >= -vh && rect.top <= vh * 2;
+      // "Near" = within N viewports of the fold (N scales with device speed). Content beyond
+      // this is priority 0 → deferred and translated lazily as it approaches (see observeLazy).
+      const aheadPx = vh * (this._aheadViewports || 1);
+      const near = rect.bottom >= -vh && rect.top <= vh + aheadPx;
       return near ? 1 : 0;
     }
 
@@ -1328,11 +1662,17 @@
         grouped.get(key).jobs.push(job);
       });
       return Array.from(grouped.values()).sort((a, b) => {
+        // Visibility first: whatever the viewer can actually see — the page structure/chrome on
+        // load, then any on-screen content — translates before off-screen "near" content, no
+        // matter which area it's in. This is what makes the visible page finish first instead of
+        // waiting behind below-the-fold comments. Off-screen-far text isn't here at all (it's
+        // deferred by the lazy observer until it approaches).
+        const priorityCmp = (b.priority || 0) - (a.priority || 0);
+        if (priorityCmp !== 0) return priorityCmp;
+        // Within the same visibility bucket, keep the area ordering as a stable tiebreak.
         const ia = AREA_PRIORITY.indexOf(a.area);
         const ib = AREA_PRIORITY.indexOf(b.area);
-        const areaCmp = (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-        if (areaCmp !== 0) return areaCmp;
-        return (b.priority || 0) - (a.priority || 0);
+        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
       });
     }
 
@@ -1347,6 +1687,8 @@
       if (!uniqueTexts.length) return new Map();
       const translated = await this.translationManager.translateMany(uniqueTexts, {
         ...options,
+        // Viewport bucket feeds the engine's paced scheduler; still below caption priority.
+        priority: group.priority || 0,
         onPartial,
       });
       const bySource = new Map();
@@ -1479,9 +1821,8 @@
       }
       this.flushSiblingSpacing();
       } finally {
-        // Defensive: if canRun() flipped false mid-flush we return early, leaving some
-        // jobs' inflight markers set — which would skip those nodes forever. Clear any
-        // still-set markers so they re-queue next pass. No-op on the normal path.
+        // If canRun() flipped false mid-flush, clear any still-set inflight markers so those
+        // nodes re-queue instead of being skipped forever.
         textJobs.forEach((job) => {
           const state = this.textState.get(job.node);
           if (state && state.requestId === job.requestId && state.inflightSig) {
@@ -1637,6 +1978,16 @@
         .bte-sideBySide {
           display: inline;
           font-size: 0.95em;
+        }
+        /* ---- overflow fit (opt-in) --------------------------------------------------------
+           Translated text runs wider than the Chinese it replaces, so a box sized for Chinese can
+           clip it. An earlier version also shrank the font, which looked worse in most places, so
+           this now ONLY relaxes the truncation on elements that are genuinely clipped — no font
+           size, spacing or line-height changes anywhere. Off unless the user turns it on. */
+        .bte-fit-wrap {
+          white-space: normal !important;
+          overflow-wrap: anywhere !important;
+          text-overflow: clip !important;
         }
       `;
       (document.head || document.documentElement).appendChild(style);

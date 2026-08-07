@@ -7,7 +7,11 @@ class LanguageManager {
             'ja': { name: '日本語', flag: '🇯🇵' },
             'ru': { name: 'Русский', flag: '🇷🇺' },
             'vi': { name: 'Tiếng Việt', flag: '🇻🇳' },
-            'id': { name: 'Indonesia', flag: '🇮🇩' }
+            'id': { name: 'Indonesia', flag: '🇮🇩' },
+            'ko': { name: '한국어', flag: '🇰🇷' },
+            'th': { name: 'ไทย', flag: '🇹🇭' },
+            'pt': { name: 'Português', flag: '🇵🇹' },
+            'es': { name: 'Español', flag: '🇪🇸' }
         };
         this.dictionary = enDictionary;
     }
@@ -50,6 +54,18 @@ class LanguageManager {
                 break;
             case 'id':
                 this.dictionary = idDictionary;
+                break;
+            case 'ko':
+                this.dictionary = koDictionary;
+                break;
+            case 'th':
+                this.dictionary = thDictionary;
+                break;
+            case 'pt':
+                this.dictionary = ptDictionary;
+                break;
+            case 'es':
+                this.dictionary = esDictionary;
                 break;
             default:
                 this.dictionary = enDictionary;

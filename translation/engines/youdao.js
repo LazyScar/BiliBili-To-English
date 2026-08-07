@@ -1,0 +1,182 @@
+(function () {
+  const ROOT = (window.BTE = window.BTE || {});
+
+  // Youdao's old keyless GET endpoint is dead (returns the SPA shell) and the current web
+  // translator is AES-encrypted, so there is no stable keyless path. This engine uses Youdao's
+  // official API, which needs an appKey + appSecret from https://ai.youdao.com/ — configured in
+  // the popup like DeepL. sign(v3) = SHA-256(appKey + truncate(q) + salt + curtime + appSecret).
+  const API_URL = "https://openapi.youdao.com/api";
+
+  function parseJsonSafe(text) {
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function runtimeMessage(payload) {
+    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
+    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
+    const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
+    if (!alive || !chrome.runtime.sendMessage) {
+      return Promise.reject(new Error("runtime unavailable"));
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(payload, (response) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            reject(new Error(err.message || "runtime message failed"));
+            return;
+          }
+          resolve(response);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async function sha256Hex(str) {
+    if (!globalThis.crypto || !globalThis.crypto.subtle) {
+      throw new Error("SubtleCrypto unavailable (insecure context)");
+    }
+    const data = new TextEncoder().encode(str);
+    const buf = await globalThis.crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  // Youdao's documented sign input: q itself when short, else first10 + length + last10.
+  function truncateInput(q) {
+    const len = q.length;
+    if (len <= 20) return q;
+    return q.substring(0, 10) + len + q.substring(len - 10);
+  }
+
+  class YoudaoEngine {
+    constructor() {
+      this.name = "youdao";
+      // One q per request is the guaranteed-correct signed path; the throttle chain spaces
+      // requests so a batch of unique lines is issued ~minInterval apart.
+      this.maxItemsPerRequest = 12;
+      this.maxCharsPerRequest = 1500;
+      this.baseIntervalMs = 120;
+      this.minIntervalMs = 120;
+      this.maxIntervalMs = 2000;
+      this.consecutiveFailures = 0;
+      this.lastRequestAt = 0;
+      this.lastError = null;
+    }
+
+    // 411 = access frequency limited, 412 = request too frequent. AIMD pacing (see RateGovernor)
+    // keeps requests just under the limit instead of oscillating into repeated throttles.
+    noteRateLimited() {
+      (ROOT.RateGovernor || {}).rateLimited?.(this);
+    }
+
+    noteSuccess() {
+      (ROOT.RateGovernor || {}).success?.(this);
+    }
+
+    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
+    schedule(task, priority) {
+      return ROOT.RateGovernor.schedule(this, task, priority);
+    }
+
+    async request(url, init) {
+      const payload = {
+        type: "bte:bgFetch",
+        payload: {
+          url,
+          method: init?.method || "GET",
+          headers: init?.headers || {},
+          body: init?.body,
+          credentials: init?.credentials || "omit",
+        },
+      };
+      try {
+        const bg = await runtimeMessage(payload);
+        if (!bg) throw new Error("empty background response");
+        return { ok: !!bg.ok, status: Number(bg.status || 0), text: String(bg.text || "") };
+      } catch (_error) {
+        const response = await fetch(url, init);
+        const text = await response.text();
+        return { ok: response.ok, status: response.status, text };
+      }
+    }
+
+    toYoudaoLang(lang) {
+      const lower = String(lang || "").toLowerCase().trim();
+      if (!lower || lower === "auto" || lower === "auto-detect") return "auto";
+      const map = {
+        zh: "zh-CHS", "zh-cn": "zh-CHS", "zh-hans": "zh-CHS", "zh-hant": "zh-CHT", "zh-tw": "zh-CHT",
+        en: "en", ja: "ja", fr: "fr", ru: "ru", vi: "vi", id: "id", ko: "ko",
+        es: "es", de: "de", pt: "pt", it: "it",
+      };
+      return map[lower] || lower.split("-")[0];
+    }
+
+    async translate(texts, options) {
+      if (!Array.isArray(texts) || texts.length === 0) return [];
+      const appKey = String(options?.youdaoAppKey || "").trim();
+      const appSecret = String(options?.youdaoAppSecret || "").trim();
+      if (!appKey || !appSecret) {
+        this.lastError = "missing-credentials";
+        return new Array(texts.length).fill(null);
+      }
+      this.lastError = null;
+      const from = this.toYoudaoLang(options?.sourceLanguage);
+      const to = this.toYoudaoLang(options?.targetLanguage) || "en";
+      const ctx = { appKey, appSecret, from, to };
+      const priority = options?.priority;
+      // Each line is a scheduled single-q request; the shared scheduler paces their start times
+      // and lets higher-priority (caption) lines run first.
+      const settled = await Promise.allSettled(
+        texts.map((text) => this.schedule(() => this.translateSingle(String(text), ctx), priority))
+      );
+      return settled.map((result) => (result.status === "fulfilled" ? result.value : null));
+    }
+
+    async translateSingle(text, ctx) {
+      const q = text;
+      if (!q.trim()) return null;
+      const salt = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+      const curtime = String(Math.round(Date.now() / 1000));
+      const sign = await sha256Hex(ctx.appKey + truncateInput(q) + salt + curtime + ctx.appSecret);
+      const body = new URLSearchParams({
+        q,
+        from: ctx.from,
+        to: ctx.to,
+        appKey: ctx.appKey,
+        salt,
+        sign,
+        signType: "v3",
+        curtime,
+      });
+      const res = await this.request(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        credentials: "omit",
+      });
+      const data = parseJsonSafe(res.text);
+      const code = data ? String(data.errorCode) : "";
+      if (!data || code !== "0") {
+        this.lastError = code || `http-${res.status}`;
+        if (code === "411" || code === "412" || code === "304") {
+          this.noteRateLimited();
+        }
+        // Throw so the manager falls back and doesn't negative-cache an auth/rate failure.
+        throw new Error(`Youdao error ${code || res.status}`);
+      }
+      const translation = Array.isArray(data.translation) ? data.translation.join("\n").trim() : "";
+      this.noteSuccess();
+      return translation && translation !== q.trim() ? translation : null;
+    }
+  }
+
+  ROOT.YoudaoEngine = YoudaoEngine;
+})();

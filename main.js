@@ -42,14 +42,14 @@
     };
   }
 
-  // Small, unobtrusive page badge shown when translations can't be fetched (network /
-  // engine errors). Lives bottom-left so it never collides with captions (bottom-center)
-  // or Bilibili's back-to-top control (bottom-right). Owned by us so it is never itself
-  // translated or scanned. Top-frame only.
+  // Appears only when offline or after repeated failures — never for a transient hiccup.
+  // Bottom-left to avoid captions (bottom-centre) and the back-to-top control (bottom-right).
   class StatusIndicator {
     constructor() {
       this.el = null;
-      this.state = "ok";
+      this.labelEl = null;
+      this.iconEl = null;
+      this.state = "ok"; // ok | error | offline
       this.hideTimer = null;
     }
 
@@ -60,29 +60,40 @@
       el.setAttribute("role", "status");
       el.style.cssText = [
         "position:fixed", "left:16px", "bottom:16px", "z-index:2147483647",
-        "display:flex", "align-items:center", "gap:8px",
-        "padding:8px 12px", "border-radius:999px",
-        "background:rgba(15,17,22,0.92)", "color:#e9edf7",
-        "font:600 12px/1 'Segoe UI',system-ui,sans-serif",
-        "border:1px solid rgba(251,114,153,0.45)",
-        "box-shadow:0 8px 24px rgba(0,0,0,0.45)", "backdrop-filter:blur(6px)",
+        "display:flex", "align-items:center", "gap:7px",
+        "padding:7px 11px", "border-radius:8px",
+        "background:#23262e", "color:#c9ced9",
+        "font:500 12px/1.2 'Segoe UI',system-ui,sans-serif",
+        "border:1px solid rgba(255,255,255,0.09)",
+        "box-shadow:0 4px 14px rgba(0,0,0,0.3)",
         "pointer-events:none", "opacity:0", "transform:translateY(6px)",
         "transition:opacity .2s ease, transform .2s ease",
       ].join(";");
-      const dot = document.createElement("span");
-      dot.style.cssText =
-        "width:8px;height:8px;border-radius:50%;background:#fb7299;box-shadow:0 0 8px #fb7299;flex:0 0 auto;";
+      const icon = document.createElement("span");
+      icon.style.cssText = "display:inline-flex;flex:0 0 auto;color:#8a90a0;";
       const label = document.createElement("span");
-      label.textContent = "Translation unavailable — retrying";
-      el.appendChild(dot);
+      el.appendChild(icon);
       el.appendChild(label);
       (document.body || document.documentElement).appendChild(el);
       this.el = el;
+      this.labelEl = label;
+      this.iconEl = icon;
       return el;
     }
 
-    show() {
+    // No "translating" state by design: normal paced translation shows nothing on the page.
+    setVariant() {
+      if (!this.iconEl) return;
+      this.iconEl.style.color = "#e0708f";
+      this.iconEl.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l22 22"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.9 15.9 0 0 1 4.7-2.88"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>';
+      if (this.el) this.el.style.borderColor = "rgba(224,112,143,0.4)";
+    }
+
+    show(text) {
       const el = this.ensureEl();
+      this.setVariant();
+      if (this.labelEl && text) this.labelEl.textContent = text;
       requestAnimationFrame(() => {
         el.style.opacity = "1";
         el.style.transform = "translateY(0)";
@@ -95,24 +106,41 @@
       this.el.style.transform = "translateY(6px)";
     }
 
-    update(status) {
-      if (this.hideTimer) {
-        clearTimeout(this.hideTimer);
-        this.hideTimer = null;
+    render() {
+      if (this.state === "offline") {
+        this.show("You are offline");
+      } else if (this.state === "error") {
+        this.show("Translation unavailable");
+      } else {
+        this.hide();
       }
+    }
+
+    // Offline is the clearest "can't translate" signal and always wins over engine states.
+    setOffline(off) {
+      if (off) {
+        this.state = "offline";
+        if (this.hideTimer) { clearTimeout(this.hideTimer); this.hideTimer = null; }
+        this.render();
+      } else if (this.state === "offline") {
+        this.state = "ok";
+        this.render();
+      }
+    }
+
+    // Only "error" (several consecutive hard network failures) surfaces anything; "busy"
+    // (rate-limited but working) is deliberately ignored.
+    update(status) {
+      if (this.state === "offline") return; // offline message takes precedence
+      if (status === "busy") return; // no "translating" indicator by design
+      if (this.hideTimer) { clearTimeout(this.hideTimer); this.hideTimer = null; }
       if (status === "error") {
-        if (this.state !== "error") {
-          this.state = "error";
-          this.show();
-        }
-        // Auto-recover the badge if the errors simply stop arriving.
-        this.hideTimer = setTimeout(() => {
-          this.state = "ok";
-          this.hide();
-        }, 6000);
+        this.state = "error";
+        this.render();
+        this.hideTimer = setTimeout(() => { this.state = "ok"; this.render(); }, 8000);
       } else if (this.state === "error") {
         this.state = "ok";
-        this.hideTimer = setTimeout(() => this.hide(), 1200);
+        this.hideTimer = setTimeout(() => this.render(), 600);
       }
     }
   }
@@ -130,11 +158,8 @@
   async function applySettings(settings) {
     currentSettings = settings;
     applyLanguage(settings);
-    // A single popup change reaches us through both the runtime message AND the
-    // storage-change/onChange path, so applySettings can be invoked 2–3 times with
-    // identical settings. Each invocation triggers a full DOM rescan + caption
-    // re-prefetch, so skip when nothing actually changed. (Route changes go through
-    // handleRouteChange, not here, so navigation re-applies are unaffected.)
+    // One popup change arrives via both the runtime message and storage onChange, so skip when
+    // nothing actually changed — each call costs a full rescan + caption re-prefetch.
     const signature = JSON.stringify(settings);
     if (signature === lastAppliedSignature) return;
     lastAppliedSignature = signature;
@@ -163,12 +188,9 @@
     const settings = settingsManager.getSettings();
     currentSettings = settings;
     applyLanguage(settings);
-    // DomTranslator: only restart if it was stopped (e.g. navigating back from an
-    // excluded route). When already running, intentionally skip queueNode(document.body):
-    // at navigation time the DOM still holds the previous page's content, and scanning
-    // it causes a visible flash of stale cached translations moments before BiliBili's
-    // SPA re-render replaces everything with fresh Chinese. The running MutationObserver
-    // handles new nodes as they are inserted; the rescanPoll is the safety net.
+    // Deliberately no queueNode here: at navigation time the DOM still holds the previous
+    // page, and scanning it flashes stale translations. The MutationObserver picks up the new
+    // content instead.
     if (domTranslator && !domTranslator.running) {
       domTranslator.updateSettings(settings);
     }
@@ -265,6 +287,10 @@
         respond({ success: true, settings: settingsManager?.getSettings() || null });
       }
 
+      if (msg?.type === "bte:getEngineStatus") {
+        respond({ success: true, status: translationManager?.getEngineStatus?.() || null });
+      }
+
       return false;
     });
   }
@@ -284,10 +310,14 @@
     translationManager = new ROOT.TranslationManager(settingsManager);
     await translationManager.initialize();
 
-    // Surface fetch/engine failures on the page (top frame only).
+    // Surface sustained failures / offline state on the page (top frame only).
     if (window.top === window.self) {
       const statusIndicator = new StatusIndicator();
       translationManager.setStatusListener((status) => statusIndicator.update(status));
+      // navigator.onLine + the online/offline events are the reliable "lost connection" signal.
+      statusIndicator.setOffline(typeof navigator !== "undefined" && navigator.onLine === false);
+      window.addEventListener("offline", () => statusIndicator.setOffline(true));
+      window.addEventListener("online", () => statusIndicator.setOffline(false));
     }
 
     domTranslator = new ROOT.DomTranslator(translationManager, settingsManager);
@@ -303,6 +333,34 @@
     await applySettings(currentSettings);
     registerRuntimeHandlers();
     startRoutePolling();
+    startContextWatch();
+    // The cache write is debounced, so flush anything pending before the page goes away.
+    window.addEventListener("pagehide", () => {
+      try { translationManager?.flushPersist?.(); } catch (_error) {}
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        try { translationManager?.flushPersist?.(); } catch (_error) {}
+      }
+    });
+  }
+
+  // After an extension reload this injected script keeps running with a dead runtime context.
+  // Tear everything down so it stops firing timers and throwing.
+  function startContextWatch() {
+    const contextWatch = setInterval(() => {
+      let alive = true;
+      try {
+        alive = !!(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id);
+      } catch (_error) {
+        alive = false;
+      }
+      if (alive) return;
+      clearInterval(contextWatch);
+      if (routePoll) clearInterval(routePoll);
+      try { domTranslator?.stop({ restore: false }); } catch (_error) {}
+      try { captionManager?.stop({ restore: false }); } catch (_error) {}
+    }, 4000);
   }
 
   if (document.readyState === "loading") {

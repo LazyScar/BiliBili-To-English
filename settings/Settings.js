@@ -5,12 +5,32 @@
   const LOCAL_DEEPL_KEY = "bteDeepLApiKey";
   const LOCAL_MICROSOFT_KEY = "bteMicrosoftApiKey";
   const LOCAL_MICROSOFT_REGION = "bteMicrosoftRegion";
+  const LOCAL_BAIDU_APPID = "bteBaiduAppid";
+  const LOCAL_BAIDU_SECRET = "bteBaiduSecret";
+  const LOCAL_YOUDAO_APPKEY = "bteYoudaoAppKey";
+  const LOCAL_YOUDAO_APPSECRET = "bteYoudaoAppSecret";
+  const LOCAL_PAPAGO_CLIENTID = "btePapagoClientId";
+  const LOCAL_PAPAGO_CLIENTSECRET = "btePapagoClientSecret";
   const PERSISTENT_CACHE_KEY = "btePersistentCacheV2";
+  // Credentials live in chrome.storage.local (never synced) for privacy.
+  const LOCAL_CREDENTIAL_KEYS = [
+    LOCAL_DEEPL_KEY,
+    LOCAL_MICROSOFT_KEY,
+    LOCAL_MICROSOFT_REGION,
+    LOCAL_BAIDU_APPID,
+    LOCAL_BAIDU_SECRET,
+    LOCAL_YOUDAO_APPKEY,
+    LOCAL_YOUDAO_APPSECRET,
+    LOCAL_PAPAGO_CLIENTID,
+    LOCAL_PAPAGO_CLIENTSECRET,
+  ];
 
   const DEFAULT_SETTINGS = {
     enabled: true,
     targetLanguage: "en",
-    engine: "microsoft",
+    // Google's free endpoint is the most reliable default (Microsoft's free Edge-token endpoint
+    // has been returning 404 for non-Edge clients). Microsoft stays available in the dropdown.
+    engine: "google",
     deepl: {
       apiKey: "",
       endpointMode: "auto",
@@ -21,6 +41,24 @@
       apiKey: "",
       region: "",
       useAzure: false,
+    },
+    baidu: {
+      appid: "",
+      secret: "",
+      optimizeUsage: false,
+      fallback: true,
+    },
+    youdao: {
+      appKey: "",
+      appSecret: "",
+      optimizeUsage: false,
+      fallback: true,
+    },
+    papago: {
+      clientId: "",
+      clientSecret: "",
+      optimizeUsage: false,
+      fallback: true,
     },
     bilingual: {
       captions: "off",
@@ -41,6 +79,24 @@
       enabled: true,
       ttlMs: 7 * 24 * 60 * 60 * 1000,
       maxEntries: 2000,
+      // The real budget is size, not entry count — entries vary hugely in length, so a count limit
+      // either wastes space or blows past it. maxEntries is kept only for the in-memory LRU.
+      maxBytes: 4 * 1024 * 1024,
+    },
+    // Learning aids. blurCaption hides the translated subtitle behind a blur until you hover it,
+    // so you try to read the original Chinese first and reveal the translation only to check.
+    learn: {
+      blurCaption: false,
+      // Hover any Chinese text to translate just that piece on demand. Useful with areas turned
+      // off (read the Chinese, reveal only what you get stuck on).
+      hoverTranslate: false,
+      // Let clipped translated text wrap instead of being cut off. Off by default: auto-adjusting
+      // the page's own layout looked worse in most places than leaving it as the site renders it.
+      fitText: false,
+      // Use Wikidata to get the OFFICIAL name of a series/game/person instead of a literal
+      // translation ("鬼灭之刃" -> "Demon Slayer", not "Ghost Destroying Blade"). Heavily gated:
+      // local checks first, max ~1 request/second, exact matches only.
+      properNouns: false,
     },
     strictCreatorMode: false,
     darkMode: true,
@@ -87,6 +143,10 @@
   function normalizeEngine(value) {
     if (value === "deepl") return "deepl";
     if (value === "microsoft") return "microsoft";
+    if (value === "yandex") return "yandex";
+    if (value === "baidu") return "baidu";
+    if (value === "youdao") return "youdao";
+    if (value === "papago") return "papago";
     return "google";
   }
 
@@ -108,6 +168,21 @@
     merged.microsoft.apiKey = typeof merged.microsoft.apiKey === "string" ? merged.microsoft.apiKey.trim() : "";
     merged.microsoft.region = typeof merged.microsoft.region === "string" ? merged.microsoft.region.trim() : "";
     merged.microsoft.useAzure = merged.microsoft.useAzure === true && !!merged.microsoft.apiKey;
+    merged.baidu = merged.baidu || {};
+    merged.baidu.appid = typeof merged.baidu.appid === "string" ? merged.baidu.appid.trim() : "";
+    merged.baidu.secret = typeof merged.baidu.secret === "string" ? merged.baidu.secret.trim() : "";
+    merged.baidu.optimizeUsage = merged.baidu.optimizeUsage === true;
+    merged.baidu.fallback = merged.baidu.fallback !== false;
+    merged.youdao = merged.youdao || {};
+    merged.youdao.appKey = typeof merged.youdao.appKey === "string" ? merged.youdao.appKey.trim() : "";
+    merged.youdao.appSecret = typeof merged.youdao.appSecret === "string" ? merged.youdao.appSecret.trim() : "";
+    merged.youdao.optimizeUsage = merged.youdao.optimizeUsage === true;
+    merged.youdao.fallback = merged.youdao.fallback !== false;
+    merged.papago = merged.papago || {};
+    merged.papago.clientId = typeof merged.papago.clientId === "string" ? merged.papago.clientId.trim() : "";
+    merged.papago.clientSecret = typeof merged.papago.clientSecret === "string" ? merged.papago.clientSecret.trim() : "";
+    merged.papago.optimizeUsage = merged.papago.optimizeUsage === true;
+    merged.papago.fallback = merged.papago.fallback !== false;
     merged.bilingual = merged.bilingual || {};
     merged.bilingual.captions = normalizeMode(merged.bilingual.captions);
     merged.bilingual.page = normalizeMode(merged.bilingual.page);
@@ -128,7 +203,16 @@
       Number.isFinite(merged.cache.maxEntries) && merged.cache.maxEntries >= 100
         ? Math.floor(merged.cache.maxEntries)
         : DEFAULT_SETTINGS.cache.maxEntries;
+    merged.cache.maxBytes =
+      Number.isFinite(merged.cache.maxBytes) && merged.cache.maxBytes >= 64 * 1024
+        ? Math.floor(merged.cache.maxBytes)
+        : DEFAULT_SETTINGS.cache.maxBytes;
     merged.strictCreatorMode = false;
+    merged.learn = merged.learn || {};
+    merged.learn.blurCaption = merged.learn.blurCaption === true;
+    merged.learn.hoverTranslate = merged.learn.hoverTranslate === true;
+    merged.learn.fitText = merged.learn.fitText === true;
+    merged.learn.properNouns = merged.learn.properNouns === true;
     merged.darkMode = merged.darkMode !== false;
     return merged;
   }
@@ -173,7 +257,7 @@
       }
       const [syncData, localData] = await Promise.all([
         storageGet("sync", [STORAGE_KEY, "enabled", "selectedLanguage", "language", "darkMode"]),
-        storageGet("local", [LOCAL_DEEPL_KEY, LOCAL_MICROSOFT_KEY, LOCAL_MICROSOFT_REGION]),
+        storageGet("local", LOCAL_CREDENTIAL_KEYS),
       ]);
       const migrated = this.migrate(syncData, localData);
       this.settings = normalizeSettings(migrated);
@@ -216,7 +300,7 @@
     async refresh() {
       const [syncData, localData] = await Promise.all([
         storageGet("sync", [STORAGE_KEY, "enabled", "selectedLanguage", "language", "darkMode"]),
-        storageGet("local", [LOCAL_DEEPL_KEY, LOCAL_MICROSOFT_KEY, LOCAL_MICROSOFT_REGION]),
+        storageGet("local", LOCAL_CREDENTIAL_KEYS),
       ]);
       this.settings = normalizeSettings(this.migrate(syncData, localData));
       this.initialized = true;
@@ -269,6 +353,17 @@
         (localData && localData[LOCAL_MICROSOFT_KEY]) || merged.microsoft.apiKey || "";
       merged.microsoft.region =
         (localData && localData[LOCAL_MICROSOFT_REGION]) || merged.microsoft.region || "";
+      merged.baidu = merged.baidu || {};
+      merged.baidu.appid = (localData && localData[LOCAL_BAIDU_APPID]) || merged.baidu.appid || "";
+      merged.baidu.secret = (localData && localData[LOCAL_BAIDU_SECRET]) || merged.baidu.secret || "";
+      merged.youdao = merged.youdao || {};
+      merged.youdao.appKey = (localData && localData[LOCAL_YOUDAO_APPKEY]) || merged.youdao.appKey || "";
+      merged.youdao.appSecret =
+        (localData && localData[LOCAL_YOUDAO_APPSECRET]) || merged.youdao.appSecret || "";
+      merged.papago = merged.papago || {};
+      merged.papago.clientId = (localData && localData[LOCAL_PAPAGO_CLIENTID]) || merged.papago.clientId || "";
+      merged.papago.clientSecret =
+        (localData && localData[LOCAL_PAPAGO_CLIENTSECRET]) || merged.papago.clientSecret || "";
       return merged;
     }
 
@@ -277,12 +372,30 @@
       const deeplKey = safe.deepl?.apiKey || "";
       const microsoftKey = safe.microsoft?.apiKey || "";
       const microsoftRegion = safe.microsoft?.region || "";
+      const baiduAppid = safe.baidu?.appid || "";
+      const baiduSecret = safe.baidu?.secret || "";
+      const youdaoAppKey = safe.youdao?.appKey || "";
+      const youdaoAppSecret = safe.youdao?.appSecret || "";
+      const papagoClientId = safe.papago?.clientId || "";
+      const papagoClientSecret = safe.papago?.clientSecret || "";
       if (safe.deepl) {
         delete safe.deepl.apiKey;
       }
       if (safe.microsoft) {
         delete safe.microsoft.apiKey;
         delete safe.microsoft.region;
+      }
+      if (safe.baidu) {
+        delete safe.baidu.appid;
+        delete safe.baidu.secret;
+      }
+      if (safe.youdao) {
+        delete safe.youdao.appKey;
+        delete safe.youdao.appSecret;
+      }
+      if (safe.papago) {
+        delete safe.papago.clientId;
+        delete safe.papago.clientSecret;
       }
       await Promise.all([
         storageSet("sync", {
@@ -296,6 +409,12 @@
           [LOCAL_DEEPL_KEY]: deeplKey,
           [LOCAL_MICROSOFT_KEY]: microsoftKey,
           [LOCAL_MICROSOFT_REGION]: microsoftRegion,
+          [LOCAL_BAIDU_APPID]: baiduAppid,
+          [LOCAL_BAIDU_SECRET]: baiduSecret,
+          [LOCAL_YOUDAO_APPKEY]: youdaoAppKey,
+          [LOCAL_YOUDAO_APPSECRET]: youdaoAppSecret,
+          [LOCAL_PAPAGO_CLIENTID]: papagoClientId,
+          [LOCAL_PAPAGO_CLIENTSECRET]: papagoClientSecret,
         }),
       ]);
       if (!options || !options.silent) {
@@ -312,9 +431,7 @@
           Object.prototype.hasOwnProperty.call(changes, "language"));
       const localChanged =
         areaName === "local" &&
-        (Object.prototype.hasOwnProperty.call(changes, LOCAL_DEEPL_KEY) ||
-          Object.prototype.hasOwnProperty.call(changes, LOCAL_MICROSOFT_KEY) ||
-          Object.prototype.hasOwnProperty.call(changes, LOCAL_MICROSOFT_REGION));
+        LOCAL_CREDENTIAL_KEYS.some((key) => Object.prototype.hasOwnProperty.call(changes, key));
       if (!syncChanged && !localChanged) return;
       const latest = await this.refresh();
       this.emit(latest);
@@ -338,6 +455,12 @@
     LOCAL_DEEPL_KEY,
     LOCAL_MICROSOFT_KEY,
     LOCAL_MICROSOFT_REGION,
+    LOCAL_BAIDU_APPID,
+    LOCAL_BAIDU_SECRET,
+    LOCAL_YOUDAO_APPKEY,
+    LOCAL_YOUDAO_APPSECRET,
+    LOCAL_PAPAGO_CLIENTID,
+    LOCAL_PAPAGO_CLIENTSECRET,
     PERSISTENT_CACHE_KEY,
   };
   ROOT.SettingsManager = SettingsManager;

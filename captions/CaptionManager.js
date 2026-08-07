@@ -62,7 +62,10 @@
   const CAPTION_FUTURE_PREFETCH_MAX_LINES = 260;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
   const CAPTION_PREFETCH_RETRY_MS = 150;
-  const CAPTION_PREFETCH_GRACE_MS = 450;
+  // How long an on-screen line will wait for the bulk prefetch before falling back to its own
+  // immediate request. Kept short deliberately: waiting is what made captions feel late. The line
+  // the viewer is reading now should never sit untranslated waiting for a batch.
+  const CAPTION_PREFETCH_GRACE_MS = 120;
   const CAPTION_EXTRA_TRACK_LIMIT = 4;
   const CAPTION_CJK_LAN_PATTERN = /(zh|cmn|yue|cn|chs|cht|sc|tc)/i;
   const CAPTION_CJK_DOC_PATTERN = /(\u4e2d\u6587|\u6c49\u8bed|\u56fd\u8bed|\u7b80\u4f53|\u7e41\u4f53)/i;
@@ -93,18 +96,25 @@
   }
 
   function runtimeMessage(payload) {
-    if (!chrome?.runtime?.sendMessage) {
-      return Promise.reject(new Error("runtime messaging unavailable"));
+    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
+    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
+    const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
+    if (!alive || !chrome.runtime.sendMessage) {
+      return Promise.reject(new Error("runtime unavailable"));
     }
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(payload, (response) => {
-        const err = chrome.runtime.lastError;
-        if (err) {
-          reject(new Error(err.message || "runtime message failed"));
-          return;
-        }
-        resolve(response);
-      });
+      try {
+        chrome.runtime.sendMessage(payload, (response) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            reject(new Error(err.message || "runtime message failed"));
+            return;
+          }
+          resolve(response);
+        });
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
@@ -187,7 +197,67 @@
       this.videoElement = null;
       this.warnedIssues = new Set();
       this.windowPrefetchInFlight = new Map();
+      // Tracks from the page-world bridge, tagged with the href they were seen on so a previous
+      // video's track is never reused after navigation.
+      this.bridgeTracks = new Map();
+      this.bridgeListenerAttached = false;
       this.handleVideoSignal = this.handleVideoSignal.bind(this);
+      this.handleBridgeMessage = this.handleBridgeMessage.bind(this);
+    }
+
+    // Receives subtitle URLs from the page-world bridge and kicks off prefetch immediately.
+    handleBridgeMessage(event) {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!data || data.__bteBridge !== true) return;
+      const href = data.href || location.href;
+      let added = false;
+      const consider = (track) => {
+        if (!track) return;
+        const url = typeof track === "string" ? track : track.url;
+        if (!url || typeof url !== "string") return;
+        if (!/(\.hdslb\.com|\.bilivideo\.com)/i.test(url)) return; // CDN-only, never arbitrary hosts
+        if (this.bridgeTracks.has(url)) return;
+        this.bridgeTracks.set(url, {
+          subtitleUrl: url,
+          lan: (track && track.lan) || "",
+          lanDoc: (track && track.lanDoc) || "",
+          href,
+        });
+        added = true;
+      };
+      if (data.kind === "subtitleUrl") {
+        consider(data.data && data.data.url);
+      } else if (data.kind === "tracks") {
+        const tracks = (data.data && data.data.tracks) || [];
+        if (Array.isArray(tracks)) tracks.forEach(consider);
+      } else {
+        return;
+      }
+      // Only kick off a prefetch when a genuinely NEW track arrived — the bridge re-scans the page
+      // periodically, so without this guard we'd re-trigger prefetch every poll for nothing.
+      if (added && this.canRun() && this.isVideoRoute()) {
+        this.prefetchCurrentVideo(false).catch(() => {});
+      }
+    }
+
+    // Subtitle tracks the bridge saw on the current page (ignore stale ones from a prior video).
+    getBridgeTracks() {
+      const here = location.href;
+      const out = [];
+      this.bridgeTracks.forEach((track) => {
+        if (track.href && track.href !== here) return;
+        out.push({ lan: track.lan, lanDoc: track.lanDoc, subtitleUrl: track.subtitleUrl });
+      });
+      return out;
+    }
+
+    requestBridgeSubtitles() {
+      try {
+        window.postMessage({ __bteBridge: true, kind: "requestSubtitles" }, location.origin || "*");
+      } catch (_error) {
+        /* ignore */
+      }
     }
 
     getPlayerVideoInfo() {
@@ -205,17 +275,26 @@
     async initialize() {
       this.settings = await this.settingsManager.initialize();
       this.injectStyles();
+      if (!this.bridgeListenerAttached) {
+        window.addEventListener("message", this.handleBridgeMessage);
+        this.bridgeListenerAttached = true;
+      }
+      // Ask the page-world bridge to report any subtitle tracks it already knows about.
+      this.requestBridgeSubtitles();
     }
 
     updateSettings(nextSettings) {
+      const prev = this.settings;
       this.settings = nextSettings;
       if (!this.settings.enabled || !this.settings.areas.captions || !this.isVideoRoute()) {
         this.stop({ restore: true });
         return;
       }
-      // If the URL changed, clear stale video state immediately so the urlPoll
-      // (900 ms) doesn't redo the same cleanup redundantly on the same navigation.
-      if (this.lastUrl !== location.href) {
+      // The subtitle cache is keyed by language+engine, so a switch must clear it or the old
+      // language lingers on screen until the next prefetch overwrites it.
+      const langChanged = prev && prev.targetLanguage !== nextSettings.targetLanguage;
+      const engineChanged = prev && prev.engine !== nextSettings.engine;
+      if (this.lastUrl !== location.href || langChanged || engineChanged) {
         this.lastUrl = location.href;
         this.clearVideoCaches();
         this.restoreOriginalCaptions();
@@ -232,10 +311,13 @@
       return !!(this.running && this.settings && this.settings.enabled && this.settings.areas.captions);
     }
 
-    // DeepL "Optimize usage": translate subtitles only as they're watched instead of
-    // pre-translating the whole video, to conserve DeepL characters. Scoped to DeepL only.
+    // "Optimize usage": translate subtitles only as they're watched instead of pre-translating
+    // the whole video, to conserve a keyed engine's quota. Applies to any keyed engine
+    // (DeepL, Baidu, Youdao, Papago) that exposes the optimizeUsage flag and has it enabled.
     isUsageOptimized() {
-      return this.settings?.engine === "deepl" && this.settings?.deepl?.optimizeUsage === true;
+      const engine = this.settings?.engine;
+      const engineConfig = engine ? this.settings?.[engine] : null;
+      return !!(engineConfig && engineConfig.optimizeUsage === true);
     }
 
     isVideoRoute() {
@@ -302,9 +384,18 @@
       this.currentVideoCacheKey = "";
       this.warnedIssues.clear();
       this.windowPrefetchInFlight.clear();
+      // Drop bridge tracks captured on other pages; keep any for the current href so a track that
+      // arrived just before this reset (same video) is still usable.
+      if (this.bridgeTracks && this.bridgeTracks.size) {
+        const here = location.href;
+        this.bridgeTracks.forEach((track, url) => {
+          if (track.href && track.href !== here) this.bridgeTracks.delete(url);
+        });
+      }
     }
 
     warnOnce(code, message, details) {
+      if (ROOT.isExtensionAlive && !ROOT.isExtensionAlive()) return;
       const key = `${code}::${this.lastUrl || location.href}`;
       if (this.warnedIssues.has(key)) return;
       this.warnedIssues.add(key);
@@ -321,6 +412,7 @@
         if (typeof state.original === "string" && state.original.trim()) {
           element.textContent = state.original;
         }
+        element.classList.remove("bte-caption-blur");
         element.style.whiteSpace = state.whiteSpace || "";
         element.style.visibility = state.visibility || "";
         state.hiddenPending = false;
@@ -671,6 +763,11 @@
     }
 
     async fetchSubtitleTracks(context) {
+      // The bridge gives the player's own authed URL: works logged in, needs no WBI signing.
+      const bridgeTracks = this.getBridgeTracks();
+      if (bridgeTracks.length) {
+        return this.rankSubtitleTracks(bridgeTracks);
+      }
       // Try the live player object first — it reflects the current video even
       // during SPA navigation when __INITIAL_STATE__ may still hold stale data.
       const playerTracks = this.getPlayerSubtitleTracks();
@@ -696,7 +793,12 @@
           const payload = await fetchJsonOrText(url);
           if (!payload) continue;
           if (payload?.code && Number(payload.code) !== 0) {
-            this.warnOnce(`probe-code-${payload.code}`, `Subtitle probe returned code ${payload.code}.`, payload);
+            // -400 (WBI signature required) and -404 are expected for a video with no subtitle
+            // track, so stay silent on those.
+            const code = Number(payload.code);
+            if (code !== -400 && code !== -404) {
+              this.warnOnce(`probe-code-${code}`, `Subtitle probe returned code ${code}.`);
+            }
             continue;
           }
           const tracks = this.parseSubtitleTracks(payload);
@@ -707,7 +809,8 @@
           this.warnOnce(`probe-failed-${url}`, `Subtitle probe request failed: ${url}`, error);
         }
       }
-      this.warnOnce("no-subtitle-tracks", "No subtitle track URLs were discovered from subtitle APIs.");
+      // A single, quiet note — most videos genuinely have no subtitles, so this is normal.
+      this.warnOnce("no-subtitle-tracks", "No subtitle tracks for this video.");
       return [];
     }
 
@@ -1100,6 +1203,9 @@
         targetLanguage: this.settings.targetLanguage,
         sourceLanguage: "zh-CN",
         skipKnownTranslated: false,
+        // Captions are what the viewer is watching right now — always translate them ahead of
+        // page/comment text at the engine's paced scheduler.
+        priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
         onPartial: ({ source, translation }) => {
           if (!translation || this.currentVideoCacheKey !== cacheKey) return;
           const normalizedSource = normalizeLine(source);
@@ -1123,8 +1229,6 @@
           `translate-empty-${cacheKey}`,
           "Prefetched subtitle lines were sent for translation but no translated output was returned."
         );
-      } else {
-        console.log(`BTE captions: ${translatedCount}/${deduped.length} lines translated, map size: ${payload.map.size}`);
       }
     }
 
@@ -1179,14 +1283,12 @@
           this.warnOnce("no-tracks", "BTE: Subtitle tracks were not found for the current video.");
           return;
         }
-        console.log("BTE: Found subtitle tracks:", tracks.map((t) => t.lan || t.subtitleUrl));
 
         const primary = await this.fetchPrimaryBody(tracks);
         if (!primary || !primary.body.length) {
           this.warnOnce("no-track-body", "BTE: Subtitle tracks were found but subtitle body download failed.");
           return;
         }
-        console.log(`BTE: Subtitle body loaded — ${primary.body.length} lines`);
 
         const primaryBody = primary.body;
         const seen = new Set();
@@ -1195,7 +1297,6 @@
           this.warnOnce("empty-subtitle-body", "BTE: Subtitle body exists but contains no translatable lines.");
           return;
         }
-        console.log(`BTE: Translating ${uniqueLines.length} unique subtitle lines`);
 
         const map = new Map();
         const timed = this.buildTimedEntries(primaryBody, map);
@@ -1227,7 +1328,13 @@
         const criticalLines = priorityLines.slice(0, CAPTION_CRITICAL_LINES);
         const nearLines = priorityLines.slice(CAPTION_CRITICAL_LINES);
 
-        await this.translateCaptionLineSet(cacheKey, payload, criticalLines);
+        // Don't block the rest of the pipeline behind the critical batch; the scheduler already
+        // orders captions first, so the near batch just queues behind them.
+        const criticalTask = this.translateCaptionLineSet(cacheKey, payload, criticalLines);
+        if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
+          void this.translateCaptionLineSet(cacheKey, payload, nearLines).catch(() => {});
+        }
+        await criticalTask;
         if (this.currentVideoCacheKey === cacheKey) {
           payload.prefetchPhase = "background";
           this.videoCache.set(cacheKey, payload);
@@ -1237,6 +1344,8 @@
         void (async () => {
           payload.prefetchSequenceRunning = true;
           try {
+            // nearLines were already dispatched in parallel above; translateCaptionLineSet skips
+            // anything already in payload.map, so this is a no-op if they finished first.
             if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
               await this.translateCaptionLineSet(cacheKey, payload, nearLines);
             }
@@ -1408,6 +1517,8 @@
           targetLanguage: this.settings?.targetLanguage || "en",
           sourceLanguage: "zh-CN",
           skipKnownTranslated: false,
+          // On-demand caption line the viewer is seeing now — highest priority.
+          priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
           onPartial: ({ source, translation }) => {
             if (!translation || !this.currentSubtitleData) return;
             const normalizedSource = normalizeLine(source);
@@ -1605,23 +1716,17 @@
         }
         if (this.containsCjkText(state.original)) {
           this.queueFallbackCaptionTranslation(state.original, { force: true });
-          // Show loading placeholder so the user knows translation is in progress
-          if (live !== "BTE Translating..." && live !== state.original) {
-            element.textContent = "BTE Translating...";
-            state.injected = "BTE Translating...";
-          } else if (!state.injected || live === state.original) {
-            element.textContent = "BTE Translating...";
-            state.injected = "BTE Translating...";
-          }
         } else if (!this.shouldWaitForPrefetchForLine(state.original)) {
           this.queueFallbackCaptionTranslation(state.original);
-          // Restore original text if we previously wrote something else
-          if (state.injected && live === state.injected && state.original && live !== state.original) {
-            element.textContent = state.original;
-            state.injected = state.original;
-          }
+        }
+        // Keep the original line on screen while fetching rather than blanking it.
+        if (state.injected && live === state.injected && state.original && live !== state.original) {
+          element.textContent = state.original;
+          state.injected = state.original;
         }
         this.setCaptionWaitingVisibility(element, state, false);
+        // Showing the untranslated original — never blur that.
+        element.classList.remove("bte-caption-blur");
         return;
       }
       const shaped = this.keepLineBreakShape(state.original, translated);
@@ -1640,10 +1745,13 @@
         } else {
           element.style.whiteSpace = state.whiteSpace;
         }
-        console.log("BTE captions: applied →", output.slice(0, 60));
         element.textContent = output;
       }
       state.injected = output;
+      // Replace mode only; in bilingual modes the original is already visible.
+      const blurLearn = !!(this.settings && this.settings.learn && this.settings.learn.blurCaption) &&
+        (this.settings?.bilingual?.captions || "off") === "off";
+      element.classList.toggle("bte-caption-blur", blurLearn);
     }
 
     applyToActiveSubtitleNodes() {
@@ -1682,9 +1790,6 @@
             if (parent.closest(CAPTION_INTERACTIVE_ANCESTOR_SELECTOR)) continue;
             addIfSafe(parent);
           }
-          if (nodes.size > 0) {
-            console.log("BTE captions: found", nodes.size, "node(s) via fallback walk in", subtitleRoot.className || subtitleRoot.id);
-          }
         }
       }
       return Array.from(nodes);
@@ -1699,6 +1804,14 @@
         .bpx-player-subtitle-wrap, .bilibili-player-video-subtitle {
           text-rendering: optimizeLegibility;
         }
+        /* Blur the translation until hovered, so the Chinese is read first. */
+        .bte-caption-blur {
+          filter: blur(6px);
+          transition: filter .12s ease;
+          cursor: help;
+          pointer-events: auto;
+        }
+        .bte-caption-blur:hover { filter: none; }
       `;
       (document.head || document.documentElement).appendChild(style);
     }
