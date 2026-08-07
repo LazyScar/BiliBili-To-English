@@ -42,7 +42,7 @@ Browser extension that translates the BiliBili interface, comments, video titles
 ## Installation
 
 ### Browser stores
-- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/)
+- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/firefox/addon/bilibili-to-english/)
 - **Chrome** – [Chrome Web Store](https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab)
 
 ### Manual
