@@ -423,7 +423,7 @@ window.popupI18n = {
     "extrasTitle": "Дополнительно",
     "srcUnpacked": "Распакованное",
     "srcSideload": "Внешнее",
-    "srcAdmin": "Установлен администратором",
+    "srcAdmin": "Установлено админом",
     "errTitle": "Проблема перевода",
     "errCopy": "Копировать детали",
     "errClose": "Закрыть",
