@@ -31,7 +31,7 @@
 Расширение для браузера, переводящее интерфейс, комментарии, названия видео и субтитры BiliBili. Работает в **Chrome, Firefox, Brave, Opera, Edge** и других браузерах на базе Chromium. Установите, выберите язык — переводы появятся автоматически.
 
 <p align="center">
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
+  <a href="https://addons.mozilla.org/firefox/addon/bilibili-to-english/">
     <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
   </a>
   <a href="https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab">
