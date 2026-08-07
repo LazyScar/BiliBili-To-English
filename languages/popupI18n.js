@@ -103,7 +103,15 @@ window.popupI18n = {
     "extrasIntro": "Still being tested. All off by default, and each can change how the page looks.",
     "experimental": "Experimental",
     "autoService": "Auto",
-    "autoServiceHint": "Uses whichever service is working and fastest, preferring the free ones."
+    "autoServiceHint": "Uses whichever service is working and fastest, preferring the free ones.",
+    "svcAuto": "Auto",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "fr": {
     "translateTo": "Traduire en",
@@ -207,7 +215,15 @@ window.popupI18n = {
     "extrasIntro": "Toujours en cours de test. Tout est désactivé par défaut et chacun peut modifier l’apparence de la page.",
     "experimental": "Expérimental",
     "autoService": "Auto",
-    "autoServiceHint": "Utilise le service qui fonctionne et le plus rapide, en préférant les services gratuits."
+    "autoServiceHint": "Utilise le service qui fonctionne et le plus rapide, en préférant les services gratuits.",
+    "svcAuto": "Auto",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "ja": {
     "translateTo": "に翻訳する",
@@ -311,7 +327,15 @@ window.popupI18n = {
     "extrasIntro": "まだテスト中です。デフォルトではすべてオフになっており、それぞれでページの外観を変更できます。",
     "experimental": "実験的",
     "autoService": "自動",
-    "autoServiceHint": "機能していて最速のサービスを使用し、無料のサービスを優先します。"
+    "autoServiceHint": "機能していて最速のサービスを使用し、無料のサービスを優先します。",
+    "svcAuto": "自動",
+    "svcGoogle": "Google 翻訳",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "ru": {
     "translateTo": "Перевести на",
@@ -415,7 +439,15 @@ window.popupI18n = {
     "extrasIntro": "Все еще тестируется. По умолчанию все отключено, и каждый может изменить внешний вид страницы.",
     "experimental": "Экспериментальный",
     "autoService": "Авто",
-    "autoServiceHint": "Использует тот сервис, который работает и быстрее всего, отдавая предпочтение бесплатным."
+    "autoServiceHint": "Использует тот сервис, который работает и быстрее всего, отдавая предпочтение бесплатным.",
+    "svcAuto": "Авто",
+    "svcGoogle": "Google Переводчик",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Яндекс Переводчик",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "vi": {
     "translateTo": "Dịch sang",
@@ -519,7 +551,15 @@ window.popupI18n = {
     "extrasIntro": "Vẫn đang được thử nghiệm. Tất cả đều tắt theo mặc định và mỗi tùy chọn có thể thay đổi giao diện của trang.",
     "experimental": "thực nghiệm",
     "autoService": "Tự động",
-    "autoServiceHint": "Sử dụng bất kỳ dịch vụ nào đang hoạt động và nhanh nhất, ưu tiên những dịch vụ miễn phí."
+    "autoServiceHint": "Sử dụng bất kỳ dịch vụ nào đang hoạt động và nhanh nhất, ưu tiên những dịch vụ miễn phí.",
+    "svcAuto": "Tự động",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "id": {
     "translateTo": "Terjemahkan ke",
@@ -623,7 +663,15 @@ window.popupI18n = {
     "extrasIntro": "Masih diuji. Semua dinonaktifkan secara default, dan masing-masing dapat mengubah tampilan halaman.",
     "experimental": "Eksperimental",
     "autoService": "Mobil",
-    "autoServiceHint": "Menggunakan layanan mana pun yang berfungsi dan tercepat, lebih memilih layanan gratis."
+    "autoServiceHint": "Menggunakan layanan mana pun yang berfungsi dan tercepat, lebih memilih layanan gratis.",
+    "svcAuto": "Mobil",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "ko": {
     "translateTo": "다음으로 번역하다",
@@ -727,7 +775,15 @@ window.popupI18n = {
     "extrasIntro": "아직 테스트 중입니다. 기본적으로 모두 해제되어 있으며 각각 페이지 모양을 변경할 수 있습니다.",
     "experimental": "실험적",
     "autoService": "자동",
-    "autoServiceHint": "무료 서비스를 선호하며 작동하고 가장 빠른 서비스를 사용합니다."
+    "autoServiceHint": "무료 서비스를 선호하며 작동하고 가장 빠른 서비스를 사용합니다.",
+    "svcAuto": "자동",
+    "svcGoogle": "구글 번역",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "네이버 파파고",
+    "svcDeepL": "DeepL"
   },
   "th": {
     "translateTo": "แปลเป็น",
@@ -831,7 +887,15 @@ window.popupI18n = {
     "extrasIntro": "ยังอยู่ระหว่างการทดสอบ ปิดทั้งหมดตามค่าเริ่มต้น และแต่ละส่วนสามารถเปลี่ยนรูปลักษณ์ของเพจได้",
     "experimental": "การทดลอง",
     "autoService": "อัตโนมัติ",
-    "autoServiceHint": "ใช้บริการใดก็ตามที่ใช้งานได้และเร็วที่สุด โดยเลือกใช้บริการฟรี"
+    "autoServiceHint": "ใช้บริการใดก็ตามที่ใช้งานได้และเร็วที่สุด โดยเลือกใช้บริการฟรี",
+    "svcAuto": "อัตโนมัติ",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "pt": {
     "needsKey": "Precisa de chave",
@@ -935,7 +999,15 @@ window.popupI18n = {
     "extrasIntro": "Ainda em teste. Tudo desativado por padrão e cada um pode alterar a aparência da página.",
     "experimental": "Experimental",
     "autoService": "Auto",
-    "autoServiceHint": "Utiliza o serviço que estiver funcionando e mais rápido, preferindo os gratuitos."
+    "autoServiceHint": "Utiliza o serviço que estiver funcionando e mais rápido, preferindo os gratuitos.",
+    "svcAuto": "Auto",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   },
   "es": {
     "needsKey": "Necesita clave",
@@ -1039,6 +1111,14 @@ window.popupI18n = {
     "extrasIntro": "Todavía en prueba. Todo está desactivado de forma predeterminada y cada uno puede cambiar el aspecto de la página.",
     "experimental": "Experimental",
     "autoService": "Auto",
-    "autoServiceHint": "Utiliza el servicio que funcione y sea más rápido, prefiriendo los gratuitos."
+    "autoServiceHint": "Utiliza el servicio que funcione y sea más rápido, prefiriendo los gratuitos.",
+    "svcAuto": "Auto",
+    "svcGoogle": "Google Translate",
+    "svcMicrosoft": "Microsoft Translator",
+    "svcYandex": "Yandex Translate",
+    "svcBaidu": "Baidu Translate",
+    "svcYoudao": "Youdao Translate",
+    "svcPapago": "Naver Papago",
+    "svcDeepL": "DeepL"
   }
 };

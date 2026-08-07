@@ -71,10 +71,11 @@ class LanguageManager {
                 this.dictionary = enDictionary;
         }
 
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.sync.set({ 'selectedLanguage': langCode });
-        }
-        
+        // Deliberately does NOT persist. SettingsManager is the single writer for the language
+        // (it stores targetLanguage and mirrors selectedLanguage in the same write). Writing here
+        // too raced with that: whichever landed first fired a storage-change, and a refresh that
+        // saw the new selectedLanguage but the old bteSettingsV2 would re-emit the PREVIOUS
+        // language and visibly revert the UI.
         return true;
     }
 
