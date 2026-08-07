@@ -101,7 +101,9 @@ window.popupI18n = {
     "properNounsHint": "Looks up series, games and people on Wikidata so they show their real name instead of a literal translation. Only for names it is sure about.",
     "bilingualTitle2": "Bilingual",
     "extrasIntro": "Still being tested. All off by default, and each can change how the page looks.",
-    "experimental": "Experimental"
+    "experimental": "Experimental",
+    "autoService": "Auto",
+    "autoServiceHint": "Uses whichever service is working and fastest, preferring the free ones."
   },
   "fr": {
     "translateTo": "Traduire en",
@@ -203,7 +205,9 @@ window.popupI18n = {
     "properNounsHint": "Recherche des séries, des jeux et des personnes sur Wikidata afin qu'ils affichent leur vrai nom au lieu d'une traduction littérale. Seulement pour les noms, c'est sûr.",
     "bilingualTitle2": "Bilingue",
     "extrasIntro": "Toujours en cours de test. Tout est désactivé par défaut et chacun peut modifier l’apparence de la page.",
-    "experimental": "Expérimental"
+    "experimental": "Expérimental",
+    "autoService": "Auto",
+    "autoServiceHint": "Utilise le service qui fonctionne et le plus rapide, en préférant les services gratuits."
   },
   "ja": {
     "translateTo": "に翻訳する",
@@ -305,7 +309,9 @@ window.popupI18n = {
     "properNounsHint": "ウィキデータでシリーズ、ゲーム、人物を検索し、直訳ではなく本名を表示します。確かな名前のみ。",
     "bilingualTitle2": "バイリンガル",
     "extrasIntro": "まだテスト中です。デフォルトではすべてオフになっており、それぞれでページの外観を変更できます。",
-    "experimental": "実験的"
+    "experimental": "実験的",
+    "autoService": "自動",
+    "autoServiceHint": "機能していて最速のサービスを使用し、無料のサービスを優先します。"
   },
   "ru": {
     "translateTo": "Перевести на",
@@ -407,7 +413,9 @@ window.popupI18n = {
     "properNounsHint": "Ищет сериалы, игры и людей в Викиданных, чтобы они показывали свои настоящие имена, а не буквальный перевод. Только для имен точно.",
     "bilingualTitle2": "Двуязычный",
     "extrasIntro": "Все еще тестируется. По умолчанию все отключено, и каждый может изменить внешний вид страницы.",
-    "experimental": "Экспериментальный"
+    "experimental": "Экспериментальный",
+    "autoService": "Авто",
+    "autoServiceHint": "Использует тот сервис, который работает и быстрее всего, отдавая предпочтение бесплатным."
   },
   "vi": {
     "translateTo": "Dịch sang",
@@ -509,7 +517,9 @@ window.popupI18n = {
     "properNounsHint": "Tra cứu các bộ truyện, trò chơi và người trên Wikidata để hiển thị tên thật của họ thay vì dịch theo nghĩa đen. Chỉ dành cho những cái tên mà nó chắc chắn về.",
     "bilingualTitle2": "song ngữ",
     "extrasIntro": "Vẫn đang được thử nghiệm. Tất cả đều tắt theo mặc định và mỗi tùy chọn có thể thay đổi giao diện của trang.",
-    "experimental": "thực nghiệm"
+    "experimental": "thực nghiệm",
+    "autoService": "Tự động",
+    "autoServiceHint": "Sử dụng bất kỳ dịch vụ nào đang hoạt động và nhanh nhất, ưu tiên những dịch vụ miễn phí."
   },
   "id": {
     "translateTo": "Terjemahkan ke",
@@ -611,7 +621,9 @@ window.popupI18n = {
     "properNounsHint": "Mencari serial, permainan, dan orang-orang di Wikidata sehingga menampilkan nama aslinya dan bukan terjemahan harfiahnya. Hanya untuk nama saja yang pasti.",
     "bilingualTitle2": "Dwibahasa",
     "extrasIntro": "Masih diuji. Semua dinonaktifkan secara default, dan masing-masing dapat mengubah tampilan halaman.",
-    "experimental": "Eksperimental"
+    "experimental": "Eksperimental",
+    "autoService": "Mobil",
+    "autoServiceHint": "Menggunakan layanan mana pun yang berfungsi dan tercepat, lebih memilih layanan gratis."
   },
   "ko": {
     "translateTo": "다음으로 번역하다",
@@ -713,7 +725,9 @@ window.popupI18n = {
     "properNounsHint": "Wikidata에서 시리즈, 게임, 인물을 찾아 직역 대신 실제 이름을 표시합니다. 이름에 대해서만 확실합니다.",
     "bilingualTitle2": "이중 언어",
     "extrasIntro": "아직 테스트 중입니다. 기본적으로 모두 해제되어 있으며 각각 페이지 모양을 변경할 수 있습니다.",
-    "experimental": "실험적"
+    "experimental": "실험적",
+    "autoService": "자동",
+    "autoServiceHint": "무료 서비스를 선호하며 작동하고 가장 빠른 서비스를 사용합니다."
   },
   "th": {
     "translateTo": "แปลเป็น",
@@ -815,7 +829,9 @@ window.popupI18n = {
     "properNounsHint": "ค้นหาซีรีส์ เกม และผู้คนใน Wikidata เพื่อให้แสดงชื่อจริงแทนการแปลตามตัวอักษร สำหรับชื่อเท่านั้นที่จะแน่ใจ",
     "bilingualTitle2": "สองภาษา",
     "extrasIntro": "ยังอยู่ระหว่างการทดสอบ ปิดทั้งหมดตามค่าเริ่มต้น และแต่ละส่วนสามารถเปลี่ยนรูปลักษณ์ของเพจได้",
-    "experimental": "การทดลอง"
+    "experimental": "การทดลอง",
+    "autoService": "อัตโนมัติ",
+    "autoServiceHint": "ใช้บริการใดก็ตามที่ใช้งานได้และเร็วที่สุด โดยเลือกใช้บริการฟรี"
   },
   "pt": {
     "needsKey": "Precisa de chave",
@@ -917,7 +933,9 @@ window.popupI18n = {
     "properNounsHint": "Procura séries, jogos e pessoas no Wikidata para que mostrem seus nomes verdadeiros em vez de uma tradução literal. Apenas para nomes é certo.",
     "bilingualTitle2": "Bilíngue",
     "extrasIntro": "Ainda em teste. Tudo desativado por padrão e cada um pode alterar a aparência da página.",
-    "experimental": "Experimental"
+    "experimental": "Experimental",
+    "autoService": "Auto",
+    "autoServiceHint": "Utiliza o serviço que estiver funcionando e mais rápido, preferindo os gratuitos."
   },
   "es": {
     "needsKey": "Necesita clave",
@@ -1019,6 +1037,8 @@ window.popupI18n = {
     "properNounsHint": "Busca series, juegos y personas en Wikidata para que muestren su nombre real en lugar de una traducción literal. Sólo para los nombres es seguro.",
     "bilingualTitle2": "Bilingüe",
     "extrasIntro": "Todavía en prueba. Todo está desactivado de forma predeterminada y cada uno puede cambiar el aspecto de la página.",
-    "experimental": "Experimental"
+    "experimental": "Experimental",
+    "autoService": "Auto",
+    "autoServiceHint": "Utiliza el servicio que funcione y sea más rápido, prefiriendo los gratuitos."
   }
 };

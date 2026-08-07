@@ -65,7 +65,7 @@
   class MicrosoftEngine {
     constructor() {
       this.name = "microsoft";
-      this.maxItemsPerRequest = 40;
+      this.maxItemsPerRequest = 20;
       this.maxCharsPerRequest = 4500;
       this.baseIntervalMs = 120;
       this.minIntervalMs = 120;
@@ -111,24 +111,22 @@
       return this.bingPromise;
     }
 
-    // Translate through Bing's web endpoint. It handles one text per request, so a batch is issued
-    // as parallel requests through the shared paced scheduler by the caller.
+    // Bing translates a whole batch in ONE request when the items are newline-joined (it preserves
+    // the line breaks in the output). Sending one request per string — which this used to do —
+    // floods the network and is far slower.
     async translateWithBingWeb(texts, options) {
       const target = this.normalizeTarget(options?.targetLanguage);
       const rawSource = String(options?.sourceLanguage || "").trim();
+      // Never auto-detect: on short CJK strings Bing guesses wrong (it has returned Arabic for
+      // Chinese input). The source here is always Chinese unless the caller says otherwise.
       const from = !rawSource || rawSource === "auto" || rawSource === "auto-detect"
-        ? "auto-detect"
+        ? "zh-Hans"
         : (rawSource.toLowerCase().startsWith("zh") ? "zh-Hans" : rawSource);
       const tokens = await this.ensureBingTokens(false);
-      const runOne = async (text, retried) => {
-        const value = String(text || "");
-        if (!value.trim()) return null;
+
+      const post = async (body, retried) => {
         this.bing.count += 1;
         const url = `${tokens.host}ttranslatev3?isVertical=1&IG=${tokens.ig}&IID=${tokens.iid}.${this.bing.count}`;
-        const body =
-          `&fromLang=${encodeURIComponent(from)}&to=${encodeURIComponent(target)}` +
-          `&text=${encodeURIComponent(value)}` +
-          `&token=${encodeURIComponent(tokens.token)}&key=${encodeURIComponent(tokens.key)}`;
         const res = await this.request(url, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -144,18 +142,53 @@
         const statusCode = payload?.StatusCode || payload?.statusCode || 200;
         if (statusCode === 205 && !retried) {
           await this.ensureBingTokens(true);
-          return runOne(value, true);
+          return post(body, true);
         }
-        const out = payload?.[0]?.translations?.[0]?.text;
-        return this.sanitizeOutput(out, value);
+        return payload?.[0]?.translations?.[0]?.text;
       };
-      const settled = await Promise.allSettled(texts.map((text) => runOne(text, false)));
-      // If every item failed, surface the error so the manager can fall back.
-      if (settled.length && settled.every((r) => r.status === "rejected")) {
-        throw settled[0].reason || new Error("Bing translation failed");
-      }
+
+      const buildBody = (value) =>
+        `&fromLang=${encodeURIComponent(from)}&to=${encodeURIComponent(target)}` +
+        `&text=${encodeURIComponent(value)}` +
+        `&token=${encodeURIComponent(tokens.token)}&key=${encodeURIComponent(tokens.key)}`;
+
+      // Bing routes through an LLM (`usedLLM: true`), which sometimes REFLOWS sentences and drops
+      // the separators — the same input can split correctly one call and merge the next. So the
+      // separator is a distinctive marker on its own line (survives far more often than a bare
+      // newline), and when a response still comes back mis-sized we split the batch in HALF and
+      // retry rather than firing one request per item. That bounds the worst case to roughly
+      // 2x requests instead of N, which is what previously flooded the network.
+      const flat = texts.map((t) => String(t || "").replace(/\s*\n+\s*/g, " "));
+      if (!flat.some((t) => t.trim())) return texts.map(() => null);
+
+      const SEP = "\n@@@\n";
+      const SPLIT_RE = /\s*@@@\s*/;
+
+      const translateChunkOfTexts = async (items, depth) => {
+        const usable = items.filter((t) => t.trim());
+        if (!usable.length) return items.map(() => null);
+        if (items.length === 1) {
+          const out = await post(buildBody(items[0]), false);
+          return [this.sanitizeOutput(out, items[0])];
+        }
+        const joined = await post(buildBody(items.join(SEP)), false);
+        const parts = typeof joined === "string" ? joined.split(SPLIT_RE) : [];
+        if (parts.length === items.length) {
+          return items.map((input, i) => this.sanitizeOutput(parts[i], input));
+        }
+        // Mis-sized: halve and retry so one bad response costs 2 requests, not `items.length`.
+        if (depth >= 4) return items.map(() => null);
+        const mid = Math.ceil(items.length / 2);
+        const [left, right] = await Promise.all([
+          translateChunkOfTexts(items.slice(0, mid), depth + 1),
+          translateChunkOfTexts(items.slice(mid), depth + 1),
+        ]);
+        return left.concat(right);
+      };
+
+      const out = await translateChunkOfTexts(flat, 0);
       this.noteSuccess();
-      return settled.map((r) => (r.status === "fulfilled" ? r.value : null));
+      return out;
     }
 
     // AIMD pacing (see RateGovernor): the Edge/Azure endpoints also rate-limit; back off fast on

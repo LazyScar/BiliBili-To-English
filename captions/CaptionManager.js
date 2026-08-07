@@ -50,16 +50,18 @@
     "[role='menuitem']",
     "[role='option']",
   ];
-  const CAPTION_PRIORITY_AHEAD_SECONDS = 55;
+  // Only translate the subtitles you are about to hear. Pre-translating the whole video used
+  // hundreds of requests up front and starved the rest of the page.
+  const CAPTION_PRIORITY_AHEAD_SECONDS = 30;
   const CAPTION_PRIORITY_BEHIND_SECONDS = 8;
-  const CAPTION_IMMEDIATE_MAX_LINES = 28;
-  const CAPTION_BOOTSTRAP_LINES = 18;
-  const CAPTION_CRITICAL_LINES = 12;
-  const CAPTION_WINDOW_PREFETCH_LINES = 180;
-  const CAPTION_WINDOW_AHEAD_SECONDS = 420;
+  const CAPTION_IMMEDIATE_MAX_LINES = 12;
+  const CAPTION_BOOTSTRAP_LINES = 8;
+  const CAPTION_CRITICAL_LINES = 6;
+  const CAPTION_WINDOW_PREFETCH_LINES = 20;
+  const CAPTION_WINDOW_AHEAD_SECONDS = 45;
   const CAPTION_WINDOW_BEHIND_SECONDS = 20;
-  const CAPTION_FUTURE_PREFETCH_AHEAD_SECONDS = 600;
-  const CAPTION_FUTURE_PREFETCH_MAX_LINES = 260;
+  const CAPTION_FUTURE_PREFETCH_AHEAD_SECONDS = 60;
+  const CAPTION_FUTURE_PREFETCH_MAX_LINES = 24;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
   const CAPTION_PREFETCH_RETRY_MS = 150;
   // How long an on-screen line will wait for the bulk prefetch before falling back to its own
@@ -200,6 +202,7 @@
       // Tracks from the page-world bridge, tagged with the href they were seen on so a previous
       // video's track is never reused after navigation.
       this.bridgeTracks = new Map();
+      this.activeLan = "";
       this.bridgeListenerAttached = false;
       this.handleVideoSignal = this.handleVideoSignal.bind(this);
       this.handleBridgeMessage = this.handleBridgeMessage.bind(this);
@@ -231,6 +234,12 @@
       } else if (data.kind === "tracks") {
         const tracks = (data.data && data.data.tracks) || [];
         if (Array.isArray(tracks)) tracks.forEach(consider);
+        // Remember which track the player is actually showing, so only that one is translated.
+        const activeLan = data.data && data.data.activeLan;
+        if (activeLan && activeLan !== this.activeLan) {
+          this.activeLan = String(activeLan);
+          added = true;
+        }
       } else {
         return;
       }
@@ -752,6 +761,9 @@
       const lan = String(track.lan || "");
       const doc = String(track.lanDoc || "");
       let score = 0;
+      // The track the player is actually showing always wins: translating a different one is both
+      // wrong and wasted work when a video ships several tracks.
+      if (this.activeLan && lan && lan === this.activeLan) score += 100;
       if (CAPTION_CJK_LAN_PATTERN.test(lan)) score += 8;
       if (CAPTION_CJK_DOC_PATTERN.test(doc)) score += 8;
       if (CAPTION_AUTO_TRACK_PATTERN.test(lan) || CAPTION_AUTO_TRACK_PATTERN.test(doc)) score -= 5;
@@ -766,7 +778,10 @@
       // The bridge gives the player's own authed URL: works logged in, needs no WBI signing.
       const bridgeTracks = this.getBridgeTracks();
       if (bridgeTracks.length) {
-        return this.rankSubtitleTracks(bridgeTracks);
+        const ranked = this.rankSubtitleTracks(bridgeTracks);
+        // Once the player tells us which track is on screen, translate ONLY that one.
+        const active = this.activeLan && ranked.find((t) => t.lan === this.activeLan);
+        return active ? [active] : ranked;
       }
       // Try the live player object first — it reflects the current video even
       // during SPA navigation when __INITIAL_STATE__ may still hold stale data.
@@ -858,19 +873,6 @@
       return null;
     }
 
-    async prefetchAdditionalTrackBodies(cacheKey, payload, tracks) {
-      if (!tracks.length) return;
-      for (const track of tracks) {
-        if (this.currentVideoCacheKey !== cacheKey) return;
-        const body = await this.fetchSubtitleBody(track.subtitleUrl);
-        if (!body.length) continue;
-        const seen = payload.sourceSet || new Set();
-        payload.sourceSet = seen;
-        const newLines = this.collectUniqueLinesFromBody(body, seen);
-        if (!newLines.length) continue;
-        await this.translateCaptionLineSet(cacheKey, payload, newLines);
-      }
-    }
 
     buildVideoCacheKey(context) {
       const engine = this.settings?.engine || "google";
@@ -1130,48 +1132,10 @@
       this.windowPrefetchInFlight.set(cacheKey, worker);
     }
 
-    ensureBackgroundFullPrefetch(cacheKey, payload) {
-      if (!payload || this.currentVideoCacheKey !== cacheKey) return;
-      if (payload.prefetchPhase === "complete") return;
-      if (payload.backgroundPrefetchRunning) return;
-      if (payload.prefetchSequenceRunning) return;
-      if (!this.canRun()) return;
-      // Optimize mode never pre-translates the full video; window + on-demand cover what's watched.
-      if (this.isUsageOptimized()) return;
-
-      const sourceLines =
-        payload.sourceSet instanceof Set
-          ? Array.from(payload.sourceSet)
-          : Array.isArray(payload.timed)
-            ? payload.timed.map((line) => normalizeLine(line.original)).filter(Boolean)
-            : [];
-      const missing = sourceLines.filter((line) => !payload.map.has(line));
-      if (!missing.length) {
-        payload.prefetchPhase = "complete";
-        this.videoCache.set(cacheKey, payload);
-        return;
-      }
-
-      payload.backgroundPrefetchRunning = true;
-      if (payload.prefetchPhase === "initial") {
-        payload.prefetchPhase = "background";
-      }
-
-      void this.translateCaptionLineSet(cacheKey, payload, missing)
-        .catch((error) => {
-          this.warnOnce("background-prefetch-failed", "Background full subtitle prefetch failed.", error);
-        })
-        .finally(() => {
-          payload.backgroundPrefetchRunning = false;
-          if (this.currentVideoCacheKey !== cacheKey) return;
-          const stillMissing = sourceLines.some((line) => !payload.map.has(line));
-          if (!stillMissing) {
-            payload.prefetchPhase = "complete";
-          }
-          this.videoCache.set(cacheKey, payload);
-          this.applyToActiveSubtitleNodes();
-        });
-    }
+    // Deliberately does nothing. Pre-translating a whole video cost hundreds of requests up front,
+    // competed with the page for the engine, and most of it was never watched. The rolling window
+    // ahead of the playhead (enqueueWindowPrefetch) plus the on-demand fallback cover what is seen.
+    ensureBackgroundFullPrefetch() {}
 
     async translateCaptionLineSet(cacheKey, payload, lines) {
       if (!lines.length) return;
@@ -1323,7 +1287,7 @@
         this.currentSubtitleData = payload;
         this.applyToActiveSubtitleNodes();
 
-        const { preferred: priorityLines, remaining: remainingLines } = this.selectPriorityLines(timed, uniqueLines);
+        const { preferred: priorityLines } = this.selectPriorityLines(timed, uniqueLines);
 
         const criticalLines = priorityLines.slice(0, CAPTION_CRITICAL_LINES);
         const nearLines = priorityLines.slice(CAPTION_CRITICAL_LINES);
@@ -1349,31 +1313,15 @@
             if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
               await this.translateCaptionLineSet(cacheKey, payload, nearLines);
             }
-            // DeepL "Optimize usage": stop after the immediate vicinity. The window
-            // prefetch + on-demand fallback still translate lines as they're watched,
-            // but we skip pre-translating the rest of the video and the extra tracks —
-            // which is where the bulk of DeepL characters would otherwise be spent.
-            if (!this.isUsageOptimized()) {
+            // Stop here. Everything past the immediate vicinity is handled by the rolling window
+            // ahead of the playhead, so the rest of the video (and the alternate tracks) is never
+            // translated up front — that used hundreds of requests and starved the page.
+            // "Optimize usage" now only shrinks the window further.
+            if (!this.isUsageOptimized() && this.currentVideoCacheKey === cacheKey) {
               const excluded = new Set([...priorityLines]);
               const futureChunk = this.collectFuturePrefetchLines(payload, excluded);
-              if (futureChunk.length && this.currentVideoCacheKey === cacheKey) {
+              if (futureChunk.length) {
                 await this.translateCaptionLineSet(cacheKey, payload, futureChunk);
-              }
-              if (remainingLines.length && this.currentVideoCacheKey === cacheKey) {
-                await this.translateCaptionLineSet(cacheKey, payload, remainingLines);
-              }
-
-              const additionalTracks = tracks
-                .filter((_track, index) => index !== primary.index)
-                .slice(0, CAPTION_EXTRA_TRACK_LIMIT);
-              if (additionalTracks.length && this.currentVideoCacheKey === cacheKey) {
-                await this.prefetchAdditionalTrackBodies(cacheKey, payload, additionalTracks);
-              }
-
-              if (this.currentVideoCacheKey === cacheKey) {
-                payload.prefetchPhase = "complete";
-                this.videoCache.set(cacheKey, payload);
-                this.applyToActiveSubtitleNodes();
               }
             }
           } catch (error) {

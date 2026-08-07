@@ -9,7 +9,7 @@
       this.maxIntervalMs = 2500;
       this.consecutiveFailures = 0;
       this.maxCharsPerRequest = 3500;
-      this.maxItemsPerRequest = 40;
+      this.maxItemsPerRequest = 20;
       this.separator = "\n<<<BTE_SPLIT_TOKEN>>>\n";
       this.fallbackConcurrency = 6;
       this.lastRequestAt = 0;

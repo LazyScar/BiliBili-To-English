@@ -30,7 +30,7 @@
     targetLanguage: "en",
     // Google's free endpoint is the most reliable default (Microsoft's free Edge-token endpoint
     // has been returning 404 for non-Edge clients). Microsoft stays available in the dropdown.
-    engine: "google",
+    engine: "auto",
     deepl: {
       apiKey: "",
       endpointMode: "auto",
@@ -141,6 +141,7 @@
   }
 
   function normalizeEngine(value) {
+    if (value === "auto") return "auto";
     if (value === "deepl") return "deepl";
     if (value === "microsoft") return "microsoft";
     if (value === "yandex") return "yandex";

@@ -1138,6 +1138,12 @@
       if (this.isTimeLikeText(normalized)) return true;
       if (/^https?:\/\/\S+$/.test(normalized)) return true;
       if (/^[\p{P}\p{S}\s]+$/u.test(normalized)) return true;
+      // No Chinese at all: the source is declared as Chinese, so sending Latin text would have it
+      // "translated" from a language it isn't, producing nonsense. It is also a large share of the
+      // page (usernames, counts, latin titles), so skipping it removes many pointless requests.
+      if (!/[㐀-鿿぀-ヿ가-힯]/.test(normalized)) return true;
+      // BV / AV ids are identifiers, never prose.
+      if (/^(BV[1-9A-Za-z]{10}|av\d+)$/i.test(normalized)) return true;
       if (parent && this.isTimeContainer(parent)) return true;
       if (this.isStrictCreatorMode()) {
         const tag = parent?.tagName ? parent.tagName.toUpperCase() : "";

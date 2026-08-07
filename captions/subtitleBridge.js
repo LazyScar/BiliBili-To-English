@@ -159,11 +159,34 @@
     return ctx;
   }
 
+  // Which subtitle track the player is CURRENTLY showing. Without this we would translate whatever
+  // track happened to rank first, which is both wrong and wasted work when several exist.
+  function activeSubtitleLan() {
+    try {
+      const p = window.player;
+      if (!p) return "";
+      if (typeof p.__core === "function") {
+        const core = p.__core();
+        const lan = core && core.subtitleStore && core.subtitleStore.state && core.subtitleStore.state.lan;
+        if (lan) return String(lan);
+      }
+      for (const method of ["getSubtitle", "getCurrentSubtitle"]) {
+        if (typeof p[method] !== "function") continue;
+        const cur = p[method]();
+        const lan = cur && (cur.lan || cur.lang || (cur.subtitle && cur.subtitle.lan));
+        if (lan) return String(lan);
+      }
+    } catch (_error) {
+      /* player API varies by build */
+    }
+    return "";
+  }
+
   function scanGlobals() {
     const tracks = collectTracks();
     tracks.forEach((track) => emitUrl(track.url));
     if (tracks.length) {
-      post("tracks", { tracks, ctx: collectContext() });
+      post("tracks", { tracks, ctx: collectContext(), activeLan: activeSubtitleLan() });
     }
   }
 

@@ -148,6 +148,51 @@
       this.engineStatus = null;
       // Canonical names for series/games/people, resolved from Wikidata when confident.
       this.properNouns = typeof ROOT.ProperNounResolver === "function" ? new ROOT.ProperNounResolver() : null;
+      // Per-engine health, used by the "auto" service to pick whichever one is actually working
+      // and fastest right now. Session-only: a service being down is a temporary fact.
+      this.engineHealth = {};
+    }
+
+    _health(name) {
+      if (!this.engineHealth[name]) {
+        this.engineHealth[name] = { ok: 0, fail: 0, avgMs: 0, cooldownUntil: 0 };
+      }
+      return this.engineHealth[name];
+    }
+
+    noteEngineResult(name, succeeded, ms) {
+      const h = this._health(name);
+      // Decay both counters so RECENT behaviour dominates. Without this a single old failure would
+      // hold an engine back permanently, even after it had been working for hours.
+      if (h.ok + h.fail > 8) {
+        h.ok *= 0.7;
+        h.fail *= 0.7;
+      }
+      if (succeeded) {
+        h.ok += 1;
+        h.cooldownUntil = 0;
+        // Rolling average, weighted toward recent calls.
+        h.avgMs = h.avgMs ? Math.round(h.avgMs * 0.7 + ms * 0.3) : ms;
+      } else {
+        h.fail += 1;
+        // Back off an engine that keeps failing so "auto" stops choosing it, with the pause
+        // growing as failures repeat (capped) and clearing on the next success.
+        h.cooldownUntil = Date.now() + Math.min(5 * 60 * 1000, 15000 * Math.min(h.fail, 8));
+      }
+    }
+
+    // Lower is better. An engine in cooldown is pushed to the back rather than removed, so it can
+    // still be used if nothing else is available.
+    _engineScore(name) {
+      const h = this._health(name);
+      const inCooldown = Date.now() < h.cooldownUntil;
+      const total = h.ok + h.fail;
+      const failRate = total ? h.fail / total : 0;
+      // Unproven engines get a neutral latency so they are tried before known-slow ones.
+      const latency = h.avgMs || 400;
+      // A 10% failure rate costs ~150ms of "equivalent latency": reliability matters, but not so
+      // much that it outweighs an engine being several times faster.
+      return (inCooldown ? 1e6 : 0) + failRate * 1500 + latency;
     }
 
     // Prefer an official name over the engine's literal translation, when we have one.
@@ -546,6 +591,21 @@
         if (!isConfigured(name)) return;
         chain.push(name);
       };
+
+      // "auto": use whichever service is actually working and fastest. Keyless engines first
+      // (no quota to burn), ordered by measured health; a configured keyed engine is only reached
+      // if the free ones are failing.
+      if (selected === "auto") {
+        const keyless = ["google", "microsoft", "yandex"]
+          .filter((name) => this.engines[name])
+          .sort((a, b) => this._engineScore(a) - this._engineScore(b));
+        keyless.forEach(add);
+        ["deepl", "baidu", "youdao", "papago"]
+          .filter((name) => this.engines[name] && isConfigured(name))
+          .sort((a, b) => this._engineScore(a) - this._engineScore(b))
+          .forEach(add);
+        return chain;
+      }
 
       add(selected);
       if (selected === "deepl") {
@@ -1009,10 +1069,15 @@
         if (!unresolved.length) break;
         const subsetTexts = unresolved.map((idx) => batchTexts[idx]);
         let subsetOut = new Array(subsetTexts.length).fill(null);
+        let threwThisEngine = false;
+        const startedAt = Date.now();
         try {
           subsetOut = await this.callEngine(engineName, subsetTexts, { ...options, priority: options.priority });
+          this.noteEngineResult(engineName, subsetOut.some(Boolean), Date.now() - startedAt);
         } catch (error) {
+          this.noteEngineResult(engineName, false, Date.now() - startedAt);
           threw = true;
+          threwThisEngine = true;
           // A network-level failure (fetch rejected, no HTTP status) is a genuine "can't reach
           // the internet" signal worth surfacing. HTTP errors — 429 rate-limit, 5xx, auth — are
           // engine-specific and handled by the fallback/backoff/retry path, so they must NOT
@@ -1026,9 +1091,11 @@
           lastErrorEngine = engineName;
         }
         const nextUnresolved = [];
+        let produced = 0;
         unresolved.forEach((originalIndex, subsetIndex) => {
           const translated = subsetOut[subsetIndex];
           if (translated) {
+            produced += 1;
             values[originalIndex] = translated;
             usedEngine[originalIndex] = engineName;
           } else {
@@ -1036,6 +1103,14 @@
           }
         });
         unresolved = nextUnresolved;
+        // Only move to the next engine when this one actually FAILED. A null for an individual
+        // item usually means "no translation needed" (already English, a number, a name), and
+        // retrying those on every other engine is what made selecting one engine hit all of them.
+        // An all-null response with no error is treated as a silent failure, so we still fall back.
+        if (!threwThisEngine && produced > 0) {
+          unresolved = [];
+          break;
+        }
       }
       return { values, usedEngine, threw, threwHard, lastError, lastErrorEngine };
     }
@@ -1109,7 +1184,7 @@
     }
 
     peekCached(text, options) {
-      if (!this.ready || !this.settings || !this.settings.enabled) {
+      if (this.settings && this.settings.enabled === false) {
         return this.buildResult(null, null, false);
       }
       const raw = typeof text === "string" ? text : "";
@@ -1124,6 +1199,9 @@
           return this.buildResult(normalizedDict, "dict", false);
         }
       }
+      // The dictionary above needs no storage, so it answers immediately. The cache below does, so
+      // it is skipped until initialize() has loaded it.
+      if (!this.ready || !this.settings) return this.buildResult(null, null, false);
       const targetLanguage =
         (options && options.targetLanguage) ||
         this.settings.targetLanguage ||
