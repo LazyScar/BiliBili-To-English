@@ -12,7 +12,6 @@
   const LOCAL_PAPAGO_CLIENTID = "btePapagoClientId";
   const LOCAL_PAPAGO_CLIENTSECRET = "btePapagoClientSecret";
   const PERSISTENT_CACHE_KEY = "btePersistentCacheV2";
-  // Credentials live in chrome.storage.local (never synced) for privacy.
   const LOCAL_CREDENTIAL_KEYS = [
     LOCAL_DEEPL_KEY,
     LOCAL_MICROSOFT_KEY,
@@ -28,8 +27,6 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     targetLanguage: "en",
-    // Google's free endpoint is the most reliable default (Microsoft's free Edge-token endpoint
-    // has been returning 404 for non-Edge clients). Microsoft stays available in the dropdown.
     engine: "auto",
     deepl: {
       apiKey: "",
@@ -79,23 +76,12 @@
       enabled: true,
       ttlMs: 7 * 24 * 60 * 60 * 1000,
       maxEntries: 2000,
-      // The real budget is size, not entry count — entries vary hugely in length, so a count limit
-      // either wastes space or blows past it. maxEntries is kept only for the in-memory LRU.
       maxBytes: 4 * 1024 * 1024,
     },
-    // Learning aids. blurCaption hides the translated subtitle behind a blur until you hover it,
-    // so you try to read the original Chinese first and reveal the translation only to check.
     learn: {
       blurCaption: false,
-      // Hover any Chinese text to translate just that piece on demand. Useful with areas turned
-      // off (read the Chinese, reveal only what you get stuck on).
       hoverTranslate: false,
-      // Let clipped translated text wrap instead of being cut off. Off by default: auto-adjusting
-      // the page's own layout looked worse in most places than leaving it as the site renders it.
       fitText: false,
-      // Use Wikidata to get the OFFICIAL name of a series/game/person instead of a literal
-      // translation ("鬼灭之刃" -> "Demon Slayer", not "Ghost Destroying Blade"). Heavily gated:
-      // local checks first, max ~1 request/second, exact matches only.
       properNouns: false,
     },
     strictCreatorMode: false,

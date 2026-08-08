@@ -10,6 +10,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let panelHintTimer = null;
   let updateDismissed = false;
   let lastReleaseTag = null;
+  let updateStatusKey = "";
 
   const UPDATE_INFO_KEY = "bteUpdateInfoV1";
   const GITHUB_RELEASE_API = "https://api.github.com/repos/LazyScar/BiliBili-To-English/releases/latest";
@@ -83,33 +84,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   const localVersion = chrome?.runtime?.getManifest?.().version || "0.0.0";
+  let latestVersionTag = "";
+  let lastCacheBytes = 0;
   els.appVersion.textContent = `v${localVersion}`;
 
   const BILINGUAL_AREAS = ["page", "comments", "dynamic", "danmaku", "captions"];
   const ENGINE_ICONS = {
-    // Auto: one input routed out to whichever service is healthiest. Flat and geometric so it sits
-    // beside the real brand marks rather than looking like a generic glyph.
     auto:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#2f3540"/><path d="M4.5 12h3.2M7.7 12c2 0 2.2-4 4.3-4M7.7 12c2 0 2.2 4 4.3 4M7.7 12h4.3" fill="none" stroke="#8fa6ff" stroke-width="1.5" stroke-linecap="round"/><circle cx="15.6" cy="8" r="2" fill="#8fa6ff"/><circle cx="15.6" cy="12" r="2" fill="#8fa6ff" opacity=".6"/><circle cx="15.6" cy="16" r="2" fill="#8fa6ff" opacity=".35"/></svg>',
-    // Real Google "G" mark
     google:
       '<svg viewBox="0 0 48 48" width="16" height="16"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg>',
-    // Real Microsoft four-square logo
     microsoft:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="2" y="2" width="9" height="9" fill="#F25022"/><rect x="13" y="2" width="9" height="9" fill="#7FBA00"/><rect x="2" y="13" width="9" height="9" fill="#00A4EF"/><rect x="13" y="13" width="9" height="9" fill="#FFB900"/></svg>',
-    // DeepL navy rounded mark
     deepl:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#0f2b46"/><text x="12" y="17" font-size="13" fill="#fff" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700">D</text></svg>',
-    // Yandex red rounded mark
     yandex:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#fc3f1d"/><text x="12" y="17.5" font-size="14" fill="#fff" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700">Я</text></svg>',
-    // Baidu blue mark with its signature bear-paw (pure SVG paths, no font dependency)
     baidu:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#4e6ef2"/><g fill="#fff"><ellipse cx="12" cy="15.2" rx="3.5" ry="2.7"/><circle cx="7.5" cy="11.4" r="1.5"/><circle cx="10.4" cy="8.9" r="1.5"/><circle cx="13.6" cy="8.9" r="1.5"/><circle cx="16.5" cy="11.4" r="1.5"/></g></svg>',
-    // Youdao teal mark with an open-dictionary glyph (pure SVG paths, no font dependency)
     youdao:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#00a870"/><path d="M12 7.2c-1.7-1-4-1.2-5.9-1.05a.9.9 0 0 0-.85.9v8.1c0 .53.44.94.97.9 1.7-.13 3.9.08 5.28.98M12 7.2c1.7-1 4-1.2 5.9-1.05a.9.9 0 0 1 .85.9v8.1c0 .53-.44.94-.97.9-1.7-.13-3.9.08-5.28.98M12 7.2V17.9" fill="none" stroke="#fff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    // Papago Naver-green mark with a speech-bubble glyph (pure SVG paths, no font dependency)
     papago:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#08cf5d"/><path d="M6 6.8h12a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6h-5.2l-3.6 2.7v-2.7H6a1.6 1.6 0 0 1-1.6-1.6V8.4A1.6 1.6 0 0 1 6 6.8Z" fill="#fff"/><circle cx="9.3" cy="11.1" r="1.05" fill="#08cf5d"/><circle cx="12" cy="11.1" r="1.05" fill="#08cf5d"/><circle cx="14.7" cy="11.1" r="1.05" fill="#08cf5d"/></svg>',
   };
@@ -118,9 +112,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     els.engineIcon.innerHTML = ENGINE_ICONS[engine] || ENGINE_ICONS.google;
   }
 
-  // Short display names for the fallback status line.
-  // Service names follow the popup language: each vendor under its official name in that language
-  // where one exists, otherwise the English brand.
   const ENGINE_I18N_KEY = {
     auto: "svcAuto", google: "svcGoogle", microsoft: "svcMicrosoft", yandex: "svcYandex",
     baidu: "svcBaidu", youdao: "svcYoudao", papago: "svcPapago", deepl: "svcDeepL",
@@ -132,11 +123,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   const engineName = (id) => (I18N && I18N[ENGINE_I18N_KEY[id]]) || ENGINE_FALLBACK_NAME[id] || id;
 
-  // Shared by Service, "Translate to" and the bilingual rows. The native <select> stays as the
-  // hidden source of truth, so existing change/persist logic is untouched.
   const openDropdowns = [];
-  // Per-dropdown holder for the current onSelect, so the delegated listener (bound once) always
-  // calls the latest callback even after the item list is rebuilt.
   const dropdownSelectRefs = {};
   document.addEventListener("click", () => openDropdowns.forEach((d) => d.close()));
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") openDropdowns.forEach((d) => d.close()); });
@@ -154,7 +141,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       dd.classList.remove("open");
       btn.setAttribute("aria-expanded", "false");
     };
-    // Rebuilt on language change, so registration and listeners must be idempotent.
     if (!openDropdowns.some((d) => d.id === ids.dd)) openDropdowns.push({ id: ids.dd, close });
     list.innerHTML = "";
     items.forEach((item) => {
@@ -172,8 +158,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       li.appendChild(lbl);
       list.appendChild(li);
     });
-    // Delegated: per-item listeners would be lost when the list is rebuilt, which silently broke
-    // the control.
     if (!list.dataset.bteBound) {
       list.dataset.bteBound = "1";
       list.addEventListener("click", (event) => {
@@ -184,7 +168,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         onSelectRef.fn(li.dataset.value);
       });
     }
-    // Keep the delegated handler pointing at the newest callback after a rebuild.
     onSelectRef.fn = onSelect;
     if (!btn.dataset.bteBound) {
       btn.dataset.bteBound = "1";
@@ -216,6 +199,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function buildEngineDropdown() {
     if (!els.engineSelect) return;
+    Array.from(els.engineSelect.options).forEach((opt) => {
+      opt.textContent = engineName(opt.value);
+    });
     const items = Array.from(els.engineSelect.options).map((opt) => ({
       value: opt.value, label: engineName(opt.value), iconHtml: ENGINE_ICONS[opt.value] || "",
     }));
@@ -258,7 +244,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (languageDropdown) languageDropdown.setValue(code);
   }
 
-  // Distinct, short reasons so a failure is actionable rather than a generic "unavailable".
   function engineReasonText(reason) {
     if (reason === "captcha") return I18N.svcCaptcha || "is blocked by a captcha";
     if (reason === "cooldown") return I18N.svcCooldown || "is paused";
@@ -269,7 +254,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     return I18N.svcUnavailable || "is unavailable";
   }
 
-  // A keyed engine cannot translate until its credentials are entered.
   function engineNeedsSetup(engine) {
     const s = settings || {};
     const has = (v) => !!(v && String(v).trim());
@@ -282,19 +266,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let lastRuntimeStatus = null;
 
-  // Priority: needs-a-key, then runtime fallback, else hidden.
   function updateEngineStatusLine() {
     const el = els.engineStatus;
     if (!el) return;
     const engine = (settings && settings.engine) || "google";
-    // Badge the row you would go to in order to fix it.
     ["deepl", "baidu", "youdao", "papago"].forEach((name) => {
       const badge = document.getElementById(`${name}Needs`);
       if (badge) badge.classList.toggle("show", engineNeedsSetup(name));
     });
     if (engineNeedsSetup(engine)) {
       const name = engineName(engine);
-      // Kept short on purpose — the "Needs key" badge below points at where to fix it.
       el.textContent = (I18N.svcNeedsKeyShort
         ? I18N.svcNeedsKeyShort.replace("{name}", name)
         : `${name} needs an API key.`);
@@ -316,7 +297,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     el.style.display = "block";
   }
 
-  // Shown only for a sustained problem, never a rate-limit or recovered fallback.
   let shownErrorSignature = "";
   function showErrorModal(title, message, code) {
     const back = document.getElementById("errModal");
@@ -337,7 +317,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   function maybeReportError(status) {
     if (!status || status.ok !== false) return;
-    // Only surface once per distinct problem while the popup is open.
     const signature = `${status.selected}:${status.reason}`;
     if (signature === shownErrorSignature) return;
     shownErrorSignature = signature;
@@ -368,8 +347,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  function browserFamily() {
+    let scheme = "";
+    try {
+      scheme = String(chrome?.runtime?.getURL?.("") || location.protocol || "");
+    } catch (_error) {
+    }
+    if (scheme.startsWith("moz-extension")) return "firefox";
+    if (scheme.startsWith("chrome-extension")) {
+      return /\bEdg[A-Z]?\//.test(navigator.userAgent) ? "edge" : "chrome";
+    }
+    if (scheme.startsWith("safari-web-extension")) return "safari";
+    return /Firefox/i.test(navigator.userAgent) ? "firefox" : "chrome";
+  }
+
   function isFirefox() {
-    return /Firefox/i.test(navigator.userAgent) || typeof browser !== "undefined";
+    return browserFamily() === "firefox";
   }
 
   function compareVersions(a, b) {
@@ -398,7 +391,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       els.saveHint.classList.remove("show");
       els.saveHint.textContent = "";
     }, timeoutMs);
-    // The topbar hint is hidden behind an open panel, so mirror it into that panel's header.
     const openPanel = document.querySelector(".view-panel.open");
     const panelHint = openPanel ? openPanel.querySelector("[data-panel-hint]") : null;
     if (panelHint) {
@@ -412,30 +404,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // installType is authoritative and readable without the "management" permission; the update_url
-  // heuristic is only a fallback.
   let installTypeCache = null;
   function installSourceLabel() {
-    const firefox = isFirefox();
-    const storeName = firefox ? (I18N.srcAmo || "Firefox Add-ons") : (I18N.srcWebStore || "Chrome Web Store");
+    const family = browserFamily();
+    const storeName =
+      family === "firefox"
+        ? I18N.srcAmo || "Firefox Add-ons"
+        : family === "edge"
+        ? I18N.srcEdge || "Edge Add-ons"
+        : I18N.srcWebStore || "Chrome Web Store";
+    const source = I18N.srcSource || "Source";
     if (installTypeCache === "normal") return storeName;
-    if (installTypeCache === "development") return I18N.srcUnpacked || "Loaded unpacked";
+    if (installTypeCache === "development") return source;
     if (installTypeCache === "sideload") return I18N.srcSideload || "Sideloaded";
     if (installTypeCache === "admin") return I18N.srcAdmin || "Installed by admin";
-    // No authoritative answer — fall back to the manifest heuristic.
     try {
       const mf = chrome?.runtime?.getManifest?.() || {};
       const hasUpdateUrl = !!(mf.update_url || mf.browser_specific_settings?.gecko?.update_url);
       if (hasUpdateUrl) return storeName;
     } catch (_error) {
-      /* ignore */
     }
-    return I18N.srcManual || "Manual install";
+    return source;
   }
 
   function detectInstallSource() {
-    // Kick off the authoritative lookup once; the label re-renders when it resolves.
-    // Firefox returns a promise, Chrome takes a callback — support both.
     if (installTypeCache !== null) return installSourceLabel();
     installTypeCache = "";
     const applyInfo = (info) => {
@@ -449,26 +441,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (api && typeof api.getSelf === "function") {
       try {
         const maybePromise = api.getSelf((info) => {
-          // Callback style (Chrome). Guard lastError so a missing API never throws.
           void (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError);
           if (info) applyInfo(info);
         });
-        // Promise style (Firefox) — getSelf returns a Promise there.
         if (maybePromise && typeof maybePromise.then === "function") {
           maybePromise.then(applyInfo).catch(() => {});
         }
       } catch (_error) {
-        /* fall back to the manifest heuristic below */
       }
     }
     return installSourceLabel();
   }
 
   function formatBytes(n) {
-    if (!Number.isFinite(n) || n <= 0) return "0 KB";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    const B = I18N.unitB || "B";
+    const KB = I18N.unitKB || "KB";
+    const MB = I18N.unitMB || "MB";
+    if (!Number.isFinite(n) || n <= 0) return `0 ${KB}`;
+    if (n < 1024) return `${n} ${B}`;
+    if (n < 1024 * 1024) return `${Math.round(n / 1024)} ${KB}`;
+    return `${(n / (1024 * 1024)).toFixed(1)} ${MB}`;
+  }
+
+  function versionLabel(v) {
+    return `${I18N.verPrefix || "v"}${String(v || "").replace(/^v/i, "")}`;
   }
 
   function sendToBiliTabs(payload) {
@@ -493,12 +489,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // ---- Popup interface localization ----
-  // The popup follows the selected target language, so picking Korean (etc.) also switches the
-  // popup's own labels. Strings come from window.popupI18n; English is the fallback.
   let I18N = (window.popupI18n && window.popupI18n.en) || {};
 
-  // Replace only an element's own text, leaving child elements (icons, "?" tooltips) intact.
   function setI18nText(el, text) {
     const suffix = el.children.length ? " " : "";
     let done = false;
@@ -526,20 +518,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       const v = I18N[el.getAttribute("data-i18n-title")];
       if (v) el.setAttribute("title", v);
     });
-    // Option labels are built in JS, so re-localize them too.
+    document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+      const v = I18N[el.getAttribute("data-i18n-aria")];
+      if (v) el.setAttribute("aria-label", v);
+    });
     buildBilingualSelects();
     buildEngineDropdown();
+    els.appVersion.textContent = versionLabel(localVersion);
+    if (els.verNew && latestVersionTag) els.verNew.textContent = versionLabel(latestVersionTag);
+    if (els.cacheSize) els.cacheSize.textContent = formatBytes(lastCacheBytes);
+    if (els.installSource) els.installSource.textContent = installSourceLabel();
     if (settings) setEngineDropdown(settings.engine || "auto");
+    if (lastReleaseTag) applyUpdateUI(lastReleaseTag);
+    else if (updateStatusKey) setUpdateStatus(updateStatusKey);
     if (document.documentElement) document.documentElement.lang = lang || "en";
   }
 
-  // Miniature of the result: grey bar = original Chinese, accent bar = translation.
   const MODE_ICONS = {
-    // Replace: translation only.
     off: '<svg width="22" height="15" viewBox="0 0 22 15" fill="none"><rect x="1" y="5" width="20" height="4.5" rx="1.6" fill="currentColor" opacity="0.95"/></svg>',
-    // Stacked: original above, translation below.
     stacked: '<svg width="22" height="15" viewBox="0 0 22 15" fill="none"><rect x="1" y="1.5" width="20" height="4" rx="1.4" fill="currentColor" opacity="0.32"/><rect x="1" y="9" width="20" height="4" rx="1.4" fill="currentColor" opacity="0.95"/></svg>',
-    // Side by side: original left, translation right.
     sideBySide: '<svg width="22" height="15" viewBox="0 0 22 15" fill="none"><rect x="1" y="5" width="9" height="4.5" rx="1.5" fill="currentColor" opacity="0.32"/><rect x="12" y="5" width="9" height="4.5" rx="1.5" fill="currentColor" opacity="0.95"/></svg>',
   };
 
@@ -570,7 +567,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         select.appendChild(option);
       });
       if (current) select.value = current;
-      // Rebuild the matching icon dropdown so its labels follow the popup language too.
       bilingualDropdowns[id] = createIconDropdown(
         { dd: `${id}Dd`, btn: `${id}DdBtn`, list: `${id}DdList`, name: `${id}DdName`, icon: `${id}DdIcon` },
         options,
@@ -590,8 +586,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function render(nextSettings) {
-    // try/finally is required: if this throws, `applying` must still clear or persist() short-
-    // circuits forever and every later click is silently ignored.
     applying = true;
     try {
       renderInner(nextSettings);
@@ -663,15 +657,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (els.properNounsToggle) els.properNounsToggle.checked = settings.learn?.properNouns === true;
     els.darkModeToggle.checked = settings.darkMode !== false;
     document.body.classList.toggle("light", settings.darkMode === false);
-    // Reflect "this engine needs setup" as soon as the engine/credentials change.
     updateEngineStatusLine();
-    // Built in JS, so they must re-render or they keep the language they were first drawn in.
     if (els.installSource) els.installSource.textContent = detectInstallSource();
     if (els.aboutVersion) els.aboutVersion.textContent = localVersion;
     refreshUpdateCopy();
   }
 
-  // Re-apply the (localized) update strings using the last known release tag.
   function refreshUpdateCopy() {
     if (lastReleaseTag) applyUpdateUI(lastReleaseTag);
   }
@@ -698,30 +689,36 @@ document.addEventListener("DOMContentLoaded", async () => {
     await new Promise((resolve) => chrome.storage.local.set({ [UPDATE_INFO_KEY]: info }, resolve));
   }
 
-  // All update copy is localized (it used to be hardcoded English). {v} is the version.
+  function setUpdateStatus(key) {
+    updateStatusKey = key;
+    if (!els.updateStatus) return;
+    els.updateStatus.classList.remove("upd");
+    els.updateStatus.textContent = I18N[key] || "";
+  }
+
   function applyUpdateUI(releaseTag) {
     if (!releaseTag) return;
     lastReleaseTag = releaseTag;
     const isNew = compareVersions(releaseTag, localVersion) > 0;
     if (isNew) {
-      const avail = (I18N.updAvailable || "Version {v} is available").replace("{v}", releaseTag);
+      const avail = (I18N.updAvailable || "Version {v} is available").replace("{v}", versionLabel(releaseTag));
       els.updateStatus.textContent = avail;
       els.updateStatus.classList.add("upd");
       els.updateBtn.style.display = "block";
-      els.updateBtn.textContent = (I18N.updTo || "Update to {v}").replace("{v}", releaseTag);
-      // The banner is now the primary surface; the corner badge stays as a compact secondary cue.
+      els.updateBtn.textContent = (I18N.updTo || "Update to {v}").replace("{v}", versionLabel(releaseTag));
       if (els.verWrap && els.verNew) {
-        els.verNew.textContent = releaseTag.startsWith("v") ? releaseTag : `v${releaseTag}`;
+        els.verNew.textContent = versionLabel(releaseTag);
+        latestVersionTag = releaseTag;
         els.verWrap.classList.add("has-update");
         els.verWrap.title = (I18N.updTitle || "Update available");
       }
       if (els.updateBanner && !updateDismissed) {
         els.updateBannerTitle.textContent = (I18N.updTitle || "Update available");
-        els.updateBannerSub.textContent = `v${localVersion} → ${releaseTag}`;
+        els.updateBannerSub.textContent = `${versionLabel(localVersion)} → ${versionLabel(releaseTag)}`;
         els.updateBanner.classList.add("show");
       }
     } else {
-      els.updateStatus.textContent = (I18N.updLatest || "You're on the latest version (v{v})").replace("{v}", localVersion);
+      els.updateStatus.textContent = (I18N.updLatest || "You're on the latest version ({v})").replace("{v}", versionLabel(localVersion));
       els.updateStatus.classList.remove("upd");
       els.updateBtn.style.display = "none";
       if (els.verWrap) { els.verWrap.classList.remove("has-update"); els.verWrap.title = ""; }
@@ -736,10 +733,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       applyUpdateUI(cached.tag);
       return;
     }
-    if (els.updateStatus) {
-      els.updateStatus.classList.remove("upd");
-      els.updateStatus.textContent = I18N.updChecking || "Checking for updates";
-    }
+    setUpdateStatus("updChecking");
     try {
       const response = await fetch(GITHUB_RELEASE_API, {
         headers: {
@@ -758,6 +752,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (_error) {
       if (cached?.tag) {
         applyUpdateUI(cached.tag);
+      } else {
+        setUpdateStatus("updFailed");
       }
     }
   }
@@ -787,15 +783,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (entries && typeof entries === "object") {
       Object.keys(entries).forEach((key) => {
         const value = entries[key]?.value;
-        // Count only real translations, not the short-lived "no translation" markers.
         if (value && value !== NEGATIVE_CACHE_SENTINEL) {
           count += 1;
-          // Rough on-disk footprint: key + stored translation (UTF-16 ≈ 2 bytes/char).
           bytes += (key.length + String(value).length) * 2;
         }
       });
     }
     els.cacheCount.textContent = count.toLocaleString();
+    lastCacheBytes = bytes;
     if (els.cacheSize) els.cacheSize.textContent = formatBytes(bytes);
   }
 
@@ -808,10 +803,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   checkForUpdates();
   refreshCacheCount();
   refreshEngineStatus();
-  // Poll the active Bilibili tab so a fallback (e.g. Yandex captcha -> Google) shows up while the
-  // popup is open. The interval is cleared automatically when the popup closes.
   setInterval(refreshEngineStatus, 3000);
-  // Translations land while the popup is open, so a number read once goes stale.
   setInterval(refreshCacheCount, 2000);
   if (chrome?.storage?.onChanged) {
     const cacheKey = window.BTE?.BTE_KEYS?.PERSISTENT_CACHE_KEY || "btePersistentCacheV2";
@@ -897,8 +889,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     persist({ bilingual: { captions: els.bilingualCaptions.value } })
   );
 
-  // "Show bilingual" button — flips every area between bilingual (stacked) and replace (off).
-  // The per-area selects in the Bilingual panel still allow fine-grained control.
   els.bilingualBtn.addEventListener("click", () => {
     const anyBilingual = BILINGUAL_AREAS.some(
       (area) => (settings.bilingual?.[area] || "off") !== "off"
@@ -909,7 +899,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  // Slide-in panels (Exclude areas / Bilingual per area / Settings).
   document.querySelectorAll("[data-open]").forEach((btn) =>
     btn.addEventListener("click", () => {
       const panel = document.getElementById(btn.dataset.open);
@@ -968,14 +957,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   els.updateBannerGo?.addEventListener("click", () => {
     openLink(isFirefox() ? FIREFOX_ADDON_PAGE : GITHUB_RELEASE_PAGE);
   });
-  // Dismiss only for this popup session — it reappears next time until actually updated.
   els.updateBannerClose?.addEventListener("click", () => {
     updateDismissed = true;
     els.updateBanner.classList.remove("show");
   });
   document.getElementById("errModalClose")?.addEventListener("click", closeErrorModal);
   document.getElementById("errModal")?.addEventListener("click", (event) => {
-    // Click the dimmed backdrop (not the dialog) to dismiss.
     if (event.target && event.target.id === "errModal") closeErrorModal();
   });
   document.getElementById("errModalCopy")?.addEventListener("click", async () => {
@@ -987,7 +974,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       await navigator.clipboard.writeText(text);
       showHint(I18N.errCopied || "Copied");
     } catch (_error) {
-      /* clipboard unavailable in this context */
     }
   });
 

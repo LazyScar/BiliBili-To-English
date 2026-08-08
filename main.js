@@ -42,14 +42,12 @@
     };
   }
 
-  // Appears only when offline or after repeated failures — never for a transient hiccup.
-  // Bottom-left to avoid captions (bottom-centre) and the back-to-top control (bottom-right).
   class StatusIndicator {
     constructor() {
       this.el = null;
       this.labelEl = null;
       this.iconEl = null;
-      this.state = "ok"; // ok | error | offline
+      this.state = "ok";
       this.hideTimer = null;
     }
 
@@ -81,7 +79,6 @@
       return el;
     }
 
-    // No "translating" state by design: normal paced translation shows nothing on the page.
     setVariant() {
       if (!this.iconEl) return;
       this.iconEl.style.color = "#e0708f";
@@ -116,7 +113,6 @@
       }
     }
 
-    // Offline is the clearest "can't translate" signal and always wins over engine states.
     setOffline(off) {
       if (off) {
         this.state = "offline";
@@ -128,11 +124,9 @@
       }
     }
 
-    // Only "error" (several consecutive hard network failures) surfaces anything; "busy"
-    // (rate-limited but working) is deliberately ignored.
     update(status) {
-      if (this.state === "offline") return; // offline message takes precedence
-      if (status === "busy") return; // no "translating" indicator by design
+      if (this.state === "offline") return;
+      if (status === "busy") return;
       if (this.hideTimer) { clearTimeout(this.hideTimer); this.hideTimer = null; }
       if (status === "error") {
         this.state = "error";
@@ -158,8 +152,6 @@
   async function applySettings(settings) {
     currentSettings = settings;
     applyLanguage(settings);
-    // One popup change arrives via both the runtime message and storage onChange, so skip when
-    // nothing actually changed — each call costs a full rescan + caption re-prefetch.
     const signature = JSON.stringify(settings);
     if (signature === lastAppliedSignature) return;
     lastAppliedSignature = signature;
@@ -188,13 +180,9 @@
     const settings = settingsManager.getSettings();
     currentSettings = settings;
     applyLanguage(settings);
-    // Deliberately no queueNode here: at navigation time the DOM still holds the previous
-    // page, and scanning it flashes stale translations. The MutationObserver picks up the new
-    // content instead.
     if (domTranslator && !domTranslator.running) {
       domTranslator.updateSettings(settings);
     }
-    // Caption manager clears old video state and starts prefetching the new video.
     captionManager?.updateSettings(settings);
   }
 
@@ -207,7 +195,6 @@
   }
 
   function patchHistoryNavigate() {
-    // Guard against double-patching (e.g. two content script injections).
     if (history.pushState?.__bte_patched) return;
     const origPush = history.pushState;
     const origReplace = history.replaceState;
@@ -229,8 +216,6 @@
   function startRoutePolling() {
     patchHistoryNavigate();
     if (routePoll) clearInterval(routePoll);
-    // Safety-net poll: catches hash-only changes and rare edge cases
-    // where pushState/replaceState was already overridden by another script.
     routePoll = setInterval(handleRouteChange, 5000);
   }
 
@@ -241,7 +226,6 @@
         try {
           sendResponse(payload);
         } catch (_error) {
-          // no-op
         }
       };
 
@@ -295,26 +279,44 @@
     });
   }
 
+  async function ensureCore() {
+    if (!settingsManager) {
+      ensureLanguageManagerFallback();
+      settingsManager = new ROOT.SettingsManager();
+      currentSettings = await settingsManager.initialize();
+      applyLanguage(currentSettings);
+    }
+    if (!translationManager) {
+      translationManager = new ROOT.TranslationManager(settingsManager);
+      await translationManager.initialize();
+    }
+    if (!captionManager) {
+      captionManager = new ROOT.CaptionManager(translationManager, settingsManager);
+      await captionManager.initialize();
+    }
+  }
+
+  async function primeCaptions() {
+    if (!shouldActivateHere()) return;
+    try {
+      await ensureCore();
+      if (!currentSettings?.enabled || !currentSettings?.areas?.captions) return;
+      captionManager.updateSettings(currentSettings);
+    } catch (_error) {
+    }
+  }
+
   async function initialize() {
     if (initialized) return;
     initialized = true;
     if (!shouldActivateHere()) {
       return;
     }
-    ensureLanguageManagerFallback();
+    await ensureCore();
 
-    settingsManager = new ROOT.SettingsManager();
-    currentSettings = await settingsManager.initialize();
-    applyLanguage(currentSettings);
-
-    translationManager = new ROOT.TranslationManager(settingsManager);
-    await translationManager.initialize();
-
-    // Surface sustained failures / offline state on the page (top frame only).
     if (window.top === window.self) {
       const statusIndicator = new StatusIndicator();
       translationManager.setStatusListener((status) => statusIndicator.update(status));
-      // navigator.onLine + the online/offline events are the reliable "lost connection" signal.
       statusIndicator.setOffline(typeof navigator !== "undefined" && navigator.onLine === false);
       window.addEventListener("offline", () => statusIndicator.setOffline(true));
       window.addEventListener("online", () => statusIndicator.setOffline(false));
@@ -322,9 +324,6 @@
 
     domTranslator = new ROOT.DomTranslator(translationManager, settingsManager);
     await domTranslator.initialize();
-
-    captionManager = new ROOT.CaptionManager(translationManager, settingsManager);
-    await captionManager.initialize();
 
     settingsManager.onChange((next) => {
       applySettings(next).catch((error) => console.warn("BTE applySettings failed:", error));
@@ -334,7 +333,6 @@
     registerRuntimeHandlers();
     startRoutePolling();
     startContextWatch();
-    // The cache write is debounced, so flush anything pending before the page goes away.
     window.addEventListener("pagehide", () => {
       try { translationManager?.flushPersist?.(); } catch (_error) {}
     });
@@ -345,8 +343,6 @@
     });
   }
 
-  // After an extension reload this injected script keeps running with a dead runtime context.
-  // Tear everything down so it stops firing timers and throwing.
   function startContextWatch() {
     const contextWatch = setInterval(() => {
       let alive = true;
@@ -364,6 +360,7 @@
   }
 
   if (document.readyState === "loading") {
+    void primeCaptions();
     document.addEventListener("DOMContentLoaded", initialize, { once: true });
   } else {
     initialize();

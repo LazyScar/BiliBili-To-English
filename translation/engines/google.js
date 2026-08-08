@@ -15,9 +15,6 @@
       this.lastRequestAt = 0;
     }
 
-    // The free gtx endpoint rate-limits aggressively (HTTP 429). Pacing is AIMD (see
-    // RateGovernor): back off fast on a 429, recover gradually so the request rate settles just
-    // under the limit instead of snapping to full speed and re-tripping it.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -26,8 +23,6 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Paced, priority-aware scheduling is shared across all engines (see RateGovernor.schedule):
-    // higher-priority (caption) tasks run ahead of page text when the pacing gate opens.
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
@@ -133,7 +128,6 @@
         "&dt=t" +
         `&q=${encodeURIComponent(text)}`;
 
-      // Direct fetch — works in most extension contexts.
       try {
         const response = await fetch(url);
         if (response.ok) {
@@ -145,11 +139,8 @@
           this.noteRateLimited();
         }
       } catch (_directError) {
-        // Fall through to background-script fetch.
       }
 
-      // Background-script fetch — bypasses CORS restrictions in restricted contexts
-      // (iframes, workers) where direct fetch to translate.googleapis.com is blocked.
       try {
         const bg = await new Promise((resolve, reject) => {
           const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
@@ -179,8 +170,6 @@
           this.noteRateLimited();
         }
       } catch (error) {
-        // Stay silent once the extension context is gone — the page just needs a reload, and
-        // logging here is what floods chrome://extensions after every extension reload/update.
         if (ROOT.isExtensionAlive && ROOT.isExtensionAlive()) {
           console.warn("BTE Google translate failed:", error);
         }

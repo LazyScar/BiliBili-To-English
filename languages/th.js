@@ -1,5 +1,3 @@
-// Thai UI-term dictionary. Values translated from the curated English labels (en->th)
-// so they stay short and button-friendly, matching the other language dictionaries.
 const thDictionary = {
   "我关注的主播": "กำลังติดตาม",
   "我的稿件": "ร่างจดหมาย",

@@ -1,11 +1,6 @@
 (function () {
   "use strict";
 
-  // Runs in the PAGE world, where Bilibili's globals (window.player, __playinfo__,
-  // __INITIAL_STATE__) and the player's own subtitle fetch are visible — the isolated-world
-  // scripts cannot see any of that. Reports discovered subtitle URLs via postMessage; never
-  // translates or mutates anything.
-
   if (window.__bteSubtitleBridgeInstalled) return;
   window.__bteSubtitleBridgeInstalled = true;
 
@@ -26,7 +21,6 @@
   function isSubtitleUrl(url) {
     const u = String(url || "");
     if (!SUB_URL_RE.test(u)) return false;
-    // CDN hosts only, so a page cannot make the extension fetch arbitrary URLs.
     try {
       const host = new URL(u.startsWith("//") ? "https:" + u : u).hostname;
       return CDN_HOST_RE.test(host);
@@ -39,7 +33,6 @@
     try {
       window.postMessage({ __bteBridge: true, kind, data, href: location.href }, location.origin || "*");
     } catch (_error) {
-      /* ignore */
     }
   }
 
@@ -51,7 +44,6 @@
     post("subtitleUrl", { url });
   }
 
-  // Hook fetch/XHR so the player's own subtitle download is captured as it happens.
   try {
     const originalFetch = window.fetch;
     if (typeof originalFetch === "function" && !originalFetch.__bteHooked) {
@@ -60,7 +52,6 @@
           const url = typeof input === "string" ? input : input && input.url;
           emitUrl(url);
         } catch (_error) {
-          /* never let the hook break the page's fetch */
         }
         return originalFetch.apply(this, arguments);
       };
@@ -68,7 +59,6 @@
       window.fetch = hooked;
     }
   } catch (_error) {
-    /* fetch not patchable — the globals poll below still covers discovery */
   }
 
   try {
@@ -78,7 +68,6 @@
         try {
           emitUrl(url);
         } catch (_error) {
-          /* ignore */
         }
         return originalOpen.apply(this, arguments);
       };
@@ -86,7 +75,6 @@
       XMLHttpRequest.prototype.open = hookedOpen;
     }
   } catch (_error) {
-    /* ignore */
   }
 
   function collectTracks() {
@@ -159,8 +147,6 @@
     return ctx;
   }
 
-  // Which subtitle track the player is CURRENTLY showing. Without this we would translate whatever
-  // track happened to rank first, which is both wrong and wasted work when several exist.
   function activeSubtitleLan() {
     try {
       const p = window.player;
@@ -177,7 +163,6 @@
         if (lan) return String(lan);
       }
     } catch (_error) {
-      /* player API varies by build */
     }
     return "";
   }
@@ -190,7 +175,6 @@
     }
   }
 
-  // Poll while the player initialises, then back off; the fetch hook covers the rest.
   let ticks = 0;
   const timer = setInterval(() => {
     if (location.href !== lastHref) {
@@ -198,7 +182,6 @@
       postedUrls.clear();
       ticks = 0;
     }
-    // Fast for the first ~15 s of a page/nav, then back off to a slow heartbeat.
     if (ticks < 30 || ticks % 8 === 0) {
       scanGlobals();
     }
@@ -206,7 +189,6 @@
   }, 500);
   if (timer && typeof timer.unref === "function") timer.unref();
 
-  // Let the isolated world ask for an immediate re-scan (e.g. right after it initializes).
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
