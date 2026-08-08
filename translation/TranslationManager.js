@@ -6,6 +6,19 @@
   const NEGATIVE_CACHE_SENTINEL = "__BTE_NO_TRANSLATION__";
   const NEGATIVE_CACHE_TTL_MS = 2 * 60 * 1000;
 
+  const COUNT_LABEL_MAX_CHARS = 4;
+  const COUNT_UNIT_VALUE = {
+    亿: 1e8, 億: 1e8,
+    千万: 1e7, 千萬: 1e7,
+    百万: 1e6, 百萬: 1e6,
+    十万: 1e5, 十萬: 1e5,
+    万: 1e4, 萬: 1e4,
+    千: 1e3,
+  };
+  const COUNT_UNIT = "亿|億|千万|千萬|百万|百萬|十万|十萬|万|萬|千";
+  const COUNT_PART = new RegExp("(\\d+(?:\\.\\d+)?)\\s*(" + COUNT_UNIT + ")", "g");
+  const CHINESE_COUNT = new RegExp("(?:\\d+(?:\\.\\d+)?\\s*(?:" + COUNT_UNIT + "))+", "g");
+
   function storageLocalGet(keys) {
     if (!globalThis.chrome || !globalThis.chrome.storage || !globalThis.chrome.storage.local) {
       return Promise.resolve({});
@@ -102,25 +115,21 @@
       };
       this.memoryCache = new LruCache(2000);
       this.persistentCache = new Map();
-      // Page cache: prevents re-translating the same string on one page. Never persisted, dies
-      // with the page, and works even when the durable cache is disabled.
-      this.sessionCache = new Map(); // key -> { value, at, bytes }
+      this.sessionCache = new Map();
       this.sessionBytes = 0;
       this.SESSION_TTL_MS = 10 * 60 * 1000;
-      this.SESSION_MAX_BYTES = 1024 * 1024;      // hard ceiling the user asked for
-      this.SESSION_TARGET_BYTES = 700 * 1024;    // prune down to here, so we sit well under the cap
+      this.SESSION_MAX_BYTES = 1024 * 1024;
+      this.SESSION_TARGET_BYTES = 700 * 1024;
       this._lastSessionSweep = 0;
 
-      // Durable tier. Serialising a 1MB cache costs ~32ms of main-thread time, so the cache is
-      // kept small (importance gate below) and written rarely.
-      this.IMPORTANT_MAX_LEN = 40;      // at/below this a string behaves like a reusable UI label
+      this.IMPORTANT_MAX_LEN = 40;
       this.EPHEMERAL_AREAS = new Set(["danmaku", "comments"]);
-      this.seenCounts = new Map();      // candidate source text -> times observed (memory only)
+      this.seenCounts = new Map();
       this.SEEN_COUNTS_MAX = 4000;
-      this.persistBytes = 0;            // running total, so pruning never recounts the whole map
-      this.persistDirty = 0;            // entries added since the last write
-      this.PERSIST_DEBOUNCE_MS = 5000;  // was 1000: a full serialise is expensive, do it rarely
-      this.PERSIST_MIN_DIRTY = 25;      // ...and only when enough has actually changed
+      this.persistBytes = 0;
+      this.persistDirty = 0;
+      this.PERSIST_DEBOUNCE_MS = 5000;
+      this.PERSIST_MIN_DIRTY = 25;
       this.pending = new Map();
       this.pendingDeferreds = new Set();
       this.knownOutputs = new Map();
@@ -134,22 +143,11 @@
       this._batchDurationSamples = [];
       this.statusListener = null;
       this.lastStatusOk = true;
-      // Only surface an on-page error after this many consecutive all-failed batches, so a
-      // single transient failure (that the fallback chain or a retry immediately recovers from)
-      // never flashes the badge.
       this._failStreak = 0;
       this._statusErrorThreshold = 3;
-      // Throttle repeated engine-failure logs so a broken engine (e.g. Microsoft's Edge auth
-      // returning 404) doesn't flood the console once per batch.
       this._engineWarnAt = {};
-      // Last real engine outcome, so the popup can tell the user when their selected engine fell
-      // back to another one (e.g. Yandex blocked by captcha -> Google) instead of it happening
-      // silently. Updated only on actual network batches (cache/dict hits don't change it).
       this.engineStatus = null;
-      // Canonical names for series/games/people, resolved from Wikidata when confident.
       this.properNouns = typeof ROOT.ProperNounResolver === "function" ? new ROOT.ProperNounResolver() : null;
-      // Per-engine health, used by the "auto" service to pick whichever one is actually working
-      // and fastest right now. Session-only: a service being down is a temporary fact.
       this.engineHealth = {};
     }
 
@@ -162,8 +160,6 @@
 
     noteEngineResult(name, succeeded, ms) {
       const h = this._health(name);
-      // Decay both counters so RECENT behaviour dominates. Without this a single old failure would
-      // hold an engine back permanently, even after it had been working for hours.
       if (h.ok + h.fail > 8) {
         h.ok *= 0.7;
         h.fail *= 0.7;
@@ -171,31 +167,22 @@
       if (succeeded) {
         h.ok += 1;
         h.cooldownUntil = 0;
-        // Rolling average, weighted toward recent calls.
         h.avgMs = h.avgMs ? Math.round(h.avgMs * 0.7 + ms * 0.3) : ms;
       } else {
         h.fail += 1;
-        // Back off an engine that keeps failing so "auto" stops choosing it, with the pause
-        // growing as failures repeat (capped) and clearing on the next success.
         h.cooldownUntil = Date.now() + Math.min(5 * 60 * 1000, 15000 * Math.min(h.fail, 8));
       }
     }
 
-    // Lower is better. An engine in cooldown is pushed to the back rather than removed, so it can
-    // still be used if nothing else is available.
     _engineScore(name) {
       const h = this._health(name);
       const inCooldown = Date.now() < h.cooldownUntil;
       const total = h.ok + h.fail;
       const failRate = total ? h.fail / total : 0;
-      // Unproven engines get a neutral latency so they are tried before known-slow ones.
       const latency = h.avgMs || 400;
-      // A 10% failure rate costs ~150ms of "equivalent latency": reliability matters, but not so
-      // much that it outweighs an engine being several times faster.
       return (inCooldown ? 1e6 : 0) + failRate * 1500 + latency;
     }
 
-    // Prefer an official name over the engine's literal translation, when we have one.
     applyProperNoun(sourceText, translated) {
       if (!this.properNouns || !this.properNouns.enabled) return translated;
       const canonical = this.properNouns.lookup(sourceText);
@@ -225,8 +212,6 @@
     }
 
     _warnEngineThrottled(engineName, error) {
-      // Silent once the extension context is gone — otherwise every failing batch logs to
-      // chrome://extensions after an extension reload, which is pure noise.
       if (ROOT.isExtensionAlive && !ROOT.isExtensionAlive()) return;
       const now = Date.now();
       if (now - (this._engineWarnAt[engineName] || 0) < 30000) return;
@@ -238,8 +223,6 @@
       this.statusListener = typeof fn === "function" ? fn : null;
     }
 
-    // "ok" | "busy" (rate-limited but working) | "error" (sustained failure). Booleans accepted
-    // for back-compat.
     notifyStatus(state) {
       const s = state === true ? "ok" : state === false ? "error" : state;
       this.lastStatusOk = s !== "error";
@@ -247,7 +230,6 @@
         try {
           this.statusListener(s);
         } catch (_error) {
-          /* a broken listener must never break translation */
         }
       }
     }
@@ -268,8 +250,6 @@
         if (!nextSettings.cache.enabled) {
           this.memoryCache.clear();
         }
-        // Switching target language makes every cached entry for the old language unreachable —
-        // drop them so the budget goes to the language actually in use.
         if (prevLanguage && prevLanguage !== nextSettings.targetLanguage) {
           this.dropCachesForOtherLanguages(nextSettings.targetLanguage);
         }
@@ -283,7 +263,6 @@
       this.warmUpEngines();
     }
 
-    // Warm the engine's auth/session so the first translation isn't delayed. Fire-and-forget.
     warmUpEngines() {
       try {
         if (!this.settings || !this.settings.enabled) return;
@@ -292,14 +271,11 @@
         if (engine === "microsoft" && microsoft && typeof microsoft.ensureToken === "function") {
           Promise.resolve(microsoft.ensureToken()).catch(() => {});
         }
-        // Yandex has the same cold-start cost (a sid scrape); pre-fetch it so the first
-        // subtitle/DOM translation isn't delayed by the round trip.
         const yandex = this.engines.yandex;
         if (engine === "yandex" && yandex && typeof yandex.ensureSid === "function") {
           Promise.resolve(yandex.ensureSid(false)).catch(() => {});
         }
       } catch (_error) {
-        /* never let warm-up break initialization */
       }
     }
 
@@ -322,7 +298,6 @@
     normalizeWhitespacePreservingLines(text) {
       const s = String(text || "");
       if (!s) return "";
-      // Fast path: no line breaks — avoids the split/map/filter/join pipeline.
       if (!s.includes("\r") && !s.includes("\n")) {
         return s.replace(/\s+/g, " ").trim();
       }
@@ -342,19 +317,14 @@
     applyBoundarySpacing(text) {
       const s = String(text || "");
       if (!s) return s;
-      // URLs contain letter+digit runs that must stay joined.
       if (/https?:\/\//.test(s)) return s;
-      // Fast path: without Latin/digits none of the boundary rules can match. Covers most CJK.
       if (!/[A-Za-z0-9+\/|]/.test(s)) return s;
-      // Protect BV video IDs from being split apart.
       const protected_ = [];
       const protect = (m) => {
         protected_.push(m);
         return `\x02${protected_.length - 1}\x03`;
       };
       let working = s.replace(/\bBV[1-9A-Za-z]{10}\b/g, protect);
-      // Media/quality tokens must stay glued: the digit-then-letter rule below would turn "720P"
-      // into "720 P", which mangled the player menus and broke dictionary matching.
       working = working.replace(/\b\d+(?:[PpKk]|FPS|fps|Fps|HDR|hdr|Hz|hz|HZ|bit|BIT|Bit)\b/g, protect);
       working = working
         .replace(/([A-Za-z])(\d)/g, "$1 $2")
@@ -404,7 +374,6 @@
         const tokens = line.split(/\s+/).filter(Boolean);
         const out = [];
         tokens.forEach((token) => {
-          // Never split BV video IDs or placeholder tokens
           if (BV_RE.test(token) || /^\x02\d+\x03$/.test(token)) {
             out.push(token);
             return;
@@ -422,8 +391,78 @@
       return input.split("\n").map(processLine).join("\n");
     }
 
-    preprocessInputText(text) {
-      const spaced = this.applyBoundarySpacing(text);
+    groupDigits(value) {
+      if (!Number.isFinite(value)) return String(value);
+      return (Math.round(value * 100) / 100).toLocaleString("en-US");
+    }
+
+    formatCompactCount(value, targetLanguage, style) {
+      if (!Number.isFinite(value)) return String(value);
+      const long = style === "long";
+      let out;
+      try {
+        out = new Intl.NumberFormat(String(targetLanguage || "en"), {
+          notation: "compact",
+          compactDisplay: long ? "long" : "short",
+          maximumFractionDigits: 1,
+        }).format(value);
+      } catch (_error) {
+        return this.groupDigits(value);
+      }
+      if (long) return out;
+      return out.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+    }
+
+    countStyleFor(text) {
+      const remainder = String(text || "")
+        .replace(CHINESE_COUNT, "")
+        .replace(/[\s　+＋~～\-—]/g, "");
+      if (/[。．.!！?？,，、;；:：]/.test(remainder)) return "long";
+      return remainder.length <= COUNT_LABEL_MAX_CHARS ? "short" : "long";
+    }
+
+    resolveTargetLanguage(targetLanguage) {
+      if (targetLanguage) return targetLanguage;
+      if (this.settings && this.settings.targetLanguage) return this.settings.targetLanguage;
+      return window.languageManager && window.languageManager.getCurrentLanguage
+        ? window.languageManager.getCurrentLanguage()
+        : "en";
+    }
+
+    parseCountChain(chain) {
+      let total = 0;
+      let matched = false;
+      COUNT_PART.lastIndex = 0;
+      let part;
+      while ((part = COUNT_PART.exec(chain)) !== null) {
+        const unitValue = COUNT_UNIT_VALUE[part[2]];
+        if (!unitValue) continue;
+        total += Number(part[1]) * unitValue;
+        matched = true;
+      }
+      return matched ? total : null;
+    }
+
+    expandChineseCounts(text, targetLanguage) {
+      const s = String(text || "");
+      if (!/[万亿萬億千]/.test(s)) return s;
+      const style = this.countStyleFor(s);
+      return s.replace(CHINESE_COUNT, (chain) => {
+        const value = this.parseCountChain(chain);
+        return value === null ? chain : this.formatCompactCount(value, targetLanguage, style);
+      });
+    }
+
+    localizeCountOnly(normalizedRaw, targetLanguage) {
+      if (!/[万亿萬億千]/.test(normalizedRaw)) return null;
+      const remainder = normalizedRaw.replace(CHINESE_COUNT, "").replace(/[\s　+＋~～\-—]/g, "");
+      if (remainder) return null;
+      return this.expandChineseCounts(normalizedRaw, this.resolveTargetLanguage(targetLanguage)) || null;
+    }
+
+    preprocessInputText(text, targetLanguage) {
+      const counted = this.expandChineseCounts(text, this.resolveTargetLanguage(targetLanguage));
+      const spaced = this.applyBoundarySpacing(counted);
       const splitMixed = this.splitMixedAlphaNumericRecursively(spaced);
       return this.normalizeText(splitMixed);
     }
@@ -454,18 +493,12 @@
         .replace(/([([{])\s+/g, "$1")
         .replace(/\s+([)\]}])/g, "$1")
         .replace(/\s{2,}/g, " ")
-        // Collapse spaces around apostrophes in contractions: "don ' t" → "don't"
         .replace(/(\w)\s+['\u2019\u02bc]\s*(\w)/g, "$1'$2")
         .replace(/(\w)\s*['\u2019\u02bc]\s+(\w)/g, "$1'$2")
-        // Normalize curly/modifier apostrophes to straight apostrophe
         .replace(/[\u2019\u02bc]/g, "'")
-        // Collapse unit-slash spacing: "768500 / h" → "768500/h", "32 / h" → "32/h"
         .replace(/(\d)\s+\/\s+([a-zA-Z])/g, "$1/$2")
-        // Remove space before unit letter after slash: "32/ h" → "32/h"
         .replace(/\/\s+([a-zA-Z])/g, "/$1")
         .trim();
-      // If the source had line breaks but the translation lost them, try to restore them
-      // before circled/enclosed numbers (①②③ etc.) which are common in Chinese lists.
       if (input && input.includes("\n") && !out.includes("\n")) {
         const restored = out.replace(/\s+([\u2460-\u2473\u2474-\u2487\u2488-\u249b])/g, "\n$1");
         if (restored.includes("\n")) out = restored.trimStart();
@@ -481,14 +514,12 @@
       return out;
     }
 
-    // Mechanical fixes for recurring MT errors in English output. English targets only.
     applyEnglishGrammar(text, options) {
       const target = String((options && options.targetLanguage) || "en").toLowerCase();
       if (!target.startsWith("en")) return text;
       let out = String(text || "");
       if (!out) return out;
 
-      // Article by SOUND, not spelling: "a user"/"a unique" but "an hour"/"an honest".
       const vowelSound = (word) => {
         const w = word.toLowerCase();
         if (/^(hour|honest|honou?r|heir)/.test(w)) return true;
@@ -502,23 +533,16 @@
         return (isUpper ? fixed[0].toUpperCase() + fixed.slice(1) : fixed) + " " + word;
       });
 
-      // A standalone "i" is always "I".
       out = out.replace(/\bi\b/g, "I");
 
-      // Punctuation first: "hello.next" must become "hello. next" before the capitaliser can see
-      // the sentence boundary.
       out = out
-        .replace(/\s+([,.;:!?%])/g, "$1")   // no space before punctuation
-        // Space after a comma/semicolon, but never inside a number (1,000) and never after a colon
-        // — a colon is commonly part of a token ("10:24", "Note:值") where a space would be wrong.
+        .replace(/\s+([,.;:!?%])/g, "$1")
         .replace(/([,;])(?=[^\s\d])/g, "$1 ")
-        .replace(/([.!?])(?=[A-Za-z])/g, "$1 ") // "end.Next" -> "end. Next"
+        .replace(/([.!?])(?=[A-Za-z])/g, "$1 ")
         .replace(/\s{2,}/g, " ")
         .replace(/\(\s+/g, "(").replace(/\s+\)/g, ")")
         .trim();
 
-      // Sentence ends and line breaks only. Position 0 is left to applyCaseShape: Bilibili splits
-      // a comment across inline nodes, so a fragment may legitimately start mid-sentence.
       out = out.replace(/([.!?]\s+|\n)([a-z])/g, (m, lead, ch) => lead + ch.toUpperCase());
 
       return out;
@@ -533,7 +557,6 @@
       if (/[A-Z]/.test(inFirst) && /[a-z]/.test(outFirst)) {
         return outFirst.toUpperCase() + outTrimmed.slice(1);
       }
-      // CJK source → always capitalize first letter of English output
       if (/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]/.test(inFirst) && /[a-z]/.test(outFirst)) {
         return outFirst.toUpperCase() + outTrimmed.slice(1);
       }
@@ -564,8 +587,6 @@
       const selected = (options && options.engine) || settings.engine || "google";
       const chain = [];
       const deeplFallbackEnabled = settings?.deepl?.fallbackToGoogle !== false;
-      // Keyed engines are only usable once their credentials are configured, so they're
-      // silently dropped from the chain when unconfigured (both as a primary and a fallback).
       const isConfigured = (name) => {
         if (name === "deepl") {
           return !!(settings.deepl && settings.deepl.apiKey && settings.deepl.apiKey.trim());
@@ -592,9 +613,6 @@
         chain.push(name);
       };
 
-      // "auto": use whichever service is actually working and fastest. Keyless engines first
-      // (no quota to burn), ordered by measured health; a configured keyed engine is only reached
-      // if the free ones are failing.
       if (selected === "auto") {
         const keyless = ["google", "microsoft", "yandex"]
           .filter((name) => this.engines[name])
@@ -609,37 +627,27 @@
 
       add(selected);
       if (selected === "deepl") {
-        // DeepL falls back to Microsoft first (free, reliable), then Google.
         if (deeplFallbackEnabled) {
           add("microsoft");
           add("google");
         }
       } else if (selected === "yandex") {
-        // Yandex's free web endpoint is best-effort (sid rotation / rate limits), so it always
-        // falls back to the reliable free engines, then DeepL if the user keyed one.
         add("microsoft");
         add("google");
         add("deepl");
       } else if (selected === "baidu" || selected === "youdao") {
-        // China-friendly engines: the other China engine is the most useful fallback (Google/
-        // Microsoft/DeepL are often VPN-gated in China), then the free engines as a last resort.
-        // Skipped when the user turned the engine's fallback toggle off.
         if (settings[selected] && settings[selected].fallback !== false) {
           add(selected === "baidu" ? "youdao" : "baidu");
           add("microsoft");
           add("google");
         }
       } else if (selected === "papago") {
-        // Papago (keyed) falls back to the reliable free engines, then DeepL if keyed.
         if (settings.papago && settings.papago.fallback !== false) {
           add("microsoft");
           add("google");
           add("deepl");
         }
       } else {
-        // A free engine is primary: try the other free engine, then DeepL if keyed.
-        // Yandex/Baidu/Youdao are intentionally NOT auto-appended here — they're opt-in only,
-        // so a best-effort or keyed engine never slows the default Microsoft/Google paths.
         add(selected === "google" ? "microsoft" : "google");
         add("microsoft");
         add("deepl");
@@ -687,13 +695,10 @@
       return entry.expiresAt <= Date.now();
     }
 
-    // Approximate stored size of an entry (UTF-16 ≈ 2 bytes per char, plus a little overhead).
     _entryBytes(key, value) {
       return (String(key).length + String(value).length) * 2 + 48;
     }
 
-    // Drop expired page-cache entries, then evict oldest-first until we are back under target.
-    // Cheap: runs at most once a second, and only walks the page cache.
     pruneSessionCache(force) {
       const now = Date.now();
       if (!force && now - this._lastSessionSweep < 1000) return;
@@ -705,7 +710,6 @@
         }
       }
       if (this.sessionBytes <= this.SESSION_MAX_BYTES) return;
-      // Map preserves insertion order, so iterating gives us oldest-first.
       for (const [key, entry] of this.sessionCache) {
         if (this.sessionBytes <= this.SESSION_TARGET_BYTES) break;
         this.sessionBytes -= entry.bytes;
@@ -713,12 +717,9 @@
       }
     }
 
-    // When the target language changes, translations for the old language can never be reused, so
-    // they are dead weight — dropping them frees the budget for the language now in use.
     dropCachesForOtherLanguages(targetLanguage) {
       const lang = String(targetLanguage || "");
       if (!lang) return;
-      // Keys look like: engine::sourceLang::targetLang::text
       const matches = (key) => String(key).split("::")[2] === lang;
       for (const [key, entry] of this.sessionCache) {
         if (!matches(key)) {
@@ -737,7 +738,6 @@
     }
 
     lookupCache(key) {
-      // Page cache first: applies even when the durable cache is disabled.
       const sessionEntry = this.sessionCache.get(key);
       if (sessionEntry !== undefined) {
         if (Date.now() - sessionEntry.at <= this.SESSION_TTL_MS) return sessionEntry.value;
@@ -758,7 +758,7 @@
           return undefined;
         }
         memoryHit.updatedAt = Date.now();
-        memoryHit.hits = (memoryHit.hits || 0) + 1; // feeds eviction scoring
+        memoryHit.hits = (memoryHit.hits || 0) + 1;
         return memoryHit.value;
       }
       if (!this.persistentCache.has(key)) {
@@ -779,27 +779,20 @@
       return persistentHit.value;
     }
 
-    // Worth keeping beyond this page? Short labels recur everywhere; anything seen twice has
-    // proven it recurs. A long line seen once never will, so it only costs space.
     isWorthPersisting(sourceText, area) {
       const text = String(sourceText || "");
       if (!text) return false;
       const seen = (this.seenCounts.get(text) || 0) + 1;
-      // Bounded: this is a heuristic counter, not a cache.
       if (this.seenCounts.size >= this.SEEN_COUNTS_MAX) {
         const oldest = this.seenCounts.keys().next().value;
         this.seenCounts.delete(oldest);
       }
       this.seenCounts.set(text, seen);
-      // Seen more than once anywhere: proven reusable, always keep.
       if (seen >= 2) return true;
-      // Comments/danmaku are inherently one-off; require the repeat proof for them.
       if (this.EPHEMERAL_AREAS.has(area)) return false;
-      // Otherwise a short label from the page chrome — exactly the reusable material.
       return text.length <= this.IMPORTANT_MAX_LEN;
     }
 
-    // Extract the source text from a cache key (engine::source::target::text).
     _keyText(key) {
       const parts = String(key).split("::");
       return parts.length > 3 ? parts.slice(3).join("::") : "";
@@ -809,22 +802,17 @@
       if (value == null) {
         return;
       }
-      // Always remember it for this page, regardless of the persistent-cache setting. Size-capped
-      // and time-limited (see pruneSessionCache) so it can never grow unbounded or go stale.
       const bytes = this._entryBytes(key, value);
       const priorSession = this.sessionCache.get(key);
       if (priorSession) {
         this.sessionBytes -= priorSession.bytes;
-        this.sessionCache.delete(key); // re-insert so insertion order stays age order
+        this.sessionCache.delete(key);
       }
       this.sessionCache.set(key, { value, at: Date.now(), bytes });
       this.sessionBytes += bytes;
       this.pruneSessionCache();
       if (!this.settings || !this.settings.cache || !this.settings.cache.enabled) return;
       const existing = this.persistentCache.get(key);
-      // Importance gate: only promote to the durable tier if this is the kind of text that gets
-      // reused. Already-stored entries always refresh (they proved themselves by being stored).
-      // Negative-cache markers are short-lived bookkeeping and bypass the gate.
       const isNegative = value === NEGATIVE_CACHE_SENTINEL;
       if (!existing && !isNegative) {
         const area = options && options.area;
@@ -835,10 +823,8 @@
         value,
         updatedAt: now,
         expiresAt: now + (Number.isFinite(ttlMsOverride) ? ttlMsOverride : this.settings.cache.ttlMs),
-        // Preserve accumulated importance when re-storing an already-seen entry.
         hits: (existing && existing.hits) || 0,
       };
-      // Running byte total, so pruning never has to re-measure the whole map.
       if (existing) this.persistBytes -= this._entryBytes(key, existing.value);
       this.persistBytes += bytes;
       this.memoryCache.set(key, entry);
@@ -859,14 +845,10 @@
           this.persistentCache.delete(key);
         }
       });
-      // Budgeted in bytes, not entries: entry sizes vary hugely, so a count limit either wastes
-      // space or blows past it.
       const cacheSettings = (this.settings && this.settings.cache) || {};
       const maxBytes = Number.isFinite(cacheSettings.maxBytes) && cacheSettings.maxBytes > 64 * 1024
         ? cacheSettings.maxBytes
         : 4 * 1024 * 1024;
-      // persistBytes is an estimate used to skip the common case; recount exactly before evicting
-      // so the total self-corrects if anything wrote to the map directly.
       if (this.persistBytes <= maxBytes) return;
       let totalBytes = 0;
       this.persistentCache.forEach((entry, key) => {
@@ -874,11 +856,9 @@
       });
       this.persistBytes = totalBytes;
       if (totalBytes <= maxBytes) return;
-      // Evict by recency + frequency: each prior lookup is worth ~30 min of recency.
       const HIT_WEIGHT_MS = 30 * 60 * 1000;
       const score = (entry) => (entry.updatedAt || 0) + (entry.hits || 0) * HIT_WEIGHT_MS;
       const sorted = Array.from(this.persistentCache.entries()).sort((a, b) => score(a[1]) - score(b[1]));
-      // Prune to 80% of budget so we are not re-pruning on every single write.
       const target = maxBytes * 0.8;
       for (const [key, entry] of sorted) {
         if (totalBytes <= target) break;
@@ -888,19 +868,13 @@
       this.persistBytes = totalBytes;
     }
 
-    // Writing serialises the whole map (~32ms at 1MB), so wait for a lull, skip small changes,
-    // and run in idle time.
     schedulePersist() {
       if (this.persistTimer) {
-        // Something else changed — restart the timer so the write lands during a lull, not mid-burst.
         clearTimeout(this.persistTimer);
       }
       this.persistTimer = setTimeout(() => {
         this.persistTimer = null;
         const write = () => {
-          // Not enough changed to justify a full serialise. Leave the pending count alone and do
-          // NOT re-arm here — the next storeCache will schedule us again. (Re-arming unconditionally
-          // created a timer that could never settle.) flushPersist() still writes these on unload.
           if (this.persistDirty < this.PERSIST_MIN_DIRTY) return;
           this.persistDirty = 0;
           this.prunePersistentCache();
@@ -920,7 +894,6 @@
       }, this.PERSIST_DEBOUNCE_MS);
     }
 
-    // Called when the page is going away: write whatever is pending, no debounce.
     flushPersist() {
       if (this.persistTimer) {
         clearTimeout(this.persistTimer);
@@ -954,17 +927,11 @@
     }
 
     settlePendingWork() {
-      // Settle every outstanding promise BEFORE the maps are torn down so callers
-      // waiting on a translation are never left hanging. Queued single-translate
-      // items haven't started yet, so resolve them with an empty (cancelled) result;
-      // in-flight batch deferreds resolve with null (the batch's onPartial/storeCache
-      // may still complete later — a second resolve on a settled promise is a no-op).
       const droppedQueue = this.singleQueue.splice(0);
       droppedQueue.forEach((item) => {
         try {
           item.resolve(this.buildResult(null, null, false));
         } catch (_error) {
-          /* never let one bad callback strand the rest */
         }
       });
       const droppedDeferreds = Array.from(this.pendingDeferreds);
@@ -973,7 +940,6 @@
         try {
           deferred.resolve(null);
         } catch (_error) {
-          /* already settled or rejected — ignore */
         }
       });
     }
@@ -1030,7 +996,6 @@
       const engineOptions = {
         sourceLanguage: options.sourceLanguage || "auto",
         targetLanguage: options.targetLanguage || "en",
-        // Priority hint for the engine's paced scheduler: captions outrank page/comment text.
         priority: options.priority,
       };
       if (engineName === "deepl") {
@@ -1078,15 +1043,7 @@
           this.noteEngineResult(engineName, false, Date.now() - startedAt);
           threw = true;
           threwThisEngine = true;
-          // A network-level failure (fetch rejected, no HTTP status) is a genuine "can't reach
-          // the internet" signal worth surfacing. HTTP errors — 429 rate-limit, 5xx, auth — are
-          // engine-specific and handled by the fallback/backoff/retry path, so they must NOT
-          // raise the on-page "unavailable" badge (that was the false alarm during heavy load).
           if (!(Number(error?.status) > 0)) threwHard = true;
-          // Do NOT log here: a primary engine failing and a fallback engine succeeding is the
-          // normal, healthy path (e.g. Microsoft's Edge token 404 → Google). Logging every
-          // fall-back floods the console. We only surface the error (throttled) if the WHOLE
-          // chain fails to translate the batch — see the caller.
           lastError = error;
           lastErrorEngine = engineName;
         }
@@ -1103,10 +1060,6 @@
           }
         });
         unresolved = nextUnresolved;
-        // Only move to the next engine when this one actually FAILED. A null for an individual
-        // item usually means "no translation needed" (already English, a number, a name), and
-        // retrying those on every other engine is what made selecting one engine hit all of them.
-        // An all-null response with no error is treated as a silent failure, so we still fall back.
         if (!threwThisEngine && produced > 0) {
           unresolved = [];
           break;
@@ -1190,8 +1143,10 @@
       const raw = typeof text === "string" ? text : "";
       const normalizedRaw = this.normalizeText(raw);
       if (!normalizedRaw) return this.buildResult(null, null, false);
-      const prepared = this.preprocessInputText(normalizedRaw);
+      const prepared = this.preprocessInputText(normalizedRaw, options && options.targetLanguage);
       if (!prepared) return this.buildResult(null, null, false);
+      const countOnly = this.localizeCountOnly(normalizedRaw, options && options.targetLanguage);
+      if (countOnly) return this.buildResult(countOnly, "local", false);
       if (!(options && options.skipDictionary)) {
         const dictHit = this.getDictionaryTranslation(normalizedRaw) || this.getDictionaryTranslation(prepared);
         if (dictHit) {
@@ -1199,8 +1154,6 @@
           return this.buildResult(normalizedDict, "dict", false);
         }
       }
-      // The dictionary above needs no storage, so it answers immediately. The cache below does, so
-      // it is skipped until initialize() has loaded it.
       if (!this.ready || !this.settings) return this.buildResult(null, null, false);
       const targetLanguage =
         (options && options.targetLanguage) ||
@@ -1252,8 +1205,16 @@
         const raw = typeof texts[index] === "string" ? texts[index] : "";
         const normalizedRaw = this.normalizeText(raw);
         if (!normalizedRaw) continue;
-        const prepared = this.preprocessInputText(normalizedRaw);
+        const prepared = this.preprocessInputText(normalizedRaw, targetLanguage);
         if (!prepared) continue;
+        const countOnly = this.localizeCountOnly(normalizedRaw, options && options.targetLanguage);
+        if (countOnly) {
+          results[index] = this.buildResult(countOnly, "local", false);
+          if (typeof options?.onPartial === "function") {
+            options.onPartial({ source: prepared, translation: countOnly, engine: "local" });
+          }
+          continue;
+        }
         if ((options && options.skipKnownTranslated !== false) && this.isKnownTranslated(prepared, targetLanguage)) {
           continue;
         }
@@ -1373,14 +1334,8 @@
         }
         const anyTranslated = translatedBatch.some(Boolean);
         this._recordEngineStatus(primaryEngine, usedEngineBatch, anyTranslated);
-        // Report health for the on-page badge. Any success clears it. We only raise it after a
-        // sustained run of HARD (network-level) failures — never for rate-limits / HTTP errors
-        // (self-healing) and never for all-empty batches that didn't throw (untranslatable text).
         if (anyTranslated) {
           this._failStreak = 0;
-          // Succeeded — but if a soft rate-limit/HTTP error was hit along the way, report "busy"
-          // (translating, just paced). There is no on-page indicator for busy, but the status is
-          // still tracked so a genuine sustained failure is distinguishable.
           this.notifyStatus(batchThrew && !batchThrewHard ? "busy" : "ok");
         } else if (batchThrewHard) {
           this._failStreak += 1;
@@ -1390,9 +1345,6 @@
         } else if (batchThrew) {
           this.notifyStatus("busy");
         }
-        // Only log when the ENTIRE chain failed to translate this batch (a genuine problem the
-        // fallback did not recover from) — throttled per engine. A primary failing and a fallback
-        // succeeding produces no output here, so it never reaches the console.
         if (!anyTranslated && batchThrew && batchError) {
           this._warnEngineThrottled(batchErrorEngine || "translation", batchError);
         }
@@ -1401,9 +1353,6 @@
           if (normalized) {
             this.storeCache(item.key, normalized, undefined, { area: options && options.area });
           } else if (!batchThrew) {
-            // Only negative-cache a genuine "no translation" (engine responded, text
-            // unchanged). When the batch threw (network/engine failure) we skip caching
-            // so the line retries instead of staying blank for the negative-cache TTL.
             this.storeNegativeCache(item.key);
           }
           const usedEngine = usedEngineBatch[index];
@@ -1442,7 +1391,6 @@
       const samples = this._batchDurationSamples;
       if (samples.length < 3) return;
       const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
-      // Fast: avg < 400ms → scale up; slow: avg > 1200ms → scale down
       if (avg < 400 && this.maxConcurrentBatches < 6) {
         this.maxConcurrentBatches = Math.min(6, this.maxConcurrentBatches + 1);
       } else if (avg > 1200 && this.maxConcurrentBatches > 1) {

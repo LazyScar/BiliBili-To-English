@@ -50,8 +50,6 @@
     "[role='menuitem']",
     "[role='option']",
   ];
-  // Only translate the subtitles you are about to hear. Pre-translating the whole video used
-  // hundreds of requests up front and starved the rest of the page.
   const CAPTION_PRIORITY_AHEAD_SECONDS = 30;
   const CAPTION_PRIORITY_BEHIND_SECONDS = 8;
   const CAPTION_IMMEDIATE_MAX_LINES = 12;
@@ -64,28 +62,29 @@
   const CAPTION_FUTURE_PREFETCH_MAX_LINES = 24;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
   const CAPTION_PREFETCH_RETRY_MS = 150;
-  // How long an on-screen line will wait for the bulk prefetch before falling back to its own
-  // immediate request. Kept short deliberately: waiting is what made captions feel late. The line
-  // the viewer is reading now should never sit untranslated waiting for a batch.
   const CAPTION_PREFETCH_GRACE_MS = 120;
+  const CAPTION_LOOKAHEAD_UNITS = 3;
+  const CAPTION_URGENT_LEAD_SECONDS = 8;
+  const CAPTION_MIN_BATCH_LINES = 4;
   const CAPTION_EXTRA_TRACK_LIMIT = 4;
+  const CAPTION_SENTENCE_MAX_LINES = 4;
+  const CAPTION_SENTENCE_MAX_CHARS = 60;
+  const CAPTION_SENTENCE_MAX_GAP_SECONDS = 0.6;
+  const CAPTION_SENTENCE_END = /[。．.!！?？…‥~～;；:：、,，]["'”’」』）)\]】]*$/;
+  const CAPTION_SENTENCE_START_BREAK = /^[（(\[【「『<《\-—–*#@]|^[A-Za-z一-鿿]{1,8}[:：]/;
   const CAPTION_CJK_LAN_PATTERN = /(zh|cmn|yue|cn|chs|cht|sc|tc)/i;
   const CAPTION_CJK_DOC_PATTERN = /(\u4e2d\u6587|\u6c49\u8bed|\u56fd\u8bed|\u7b80\u4f53|\u7e41\u4f53)/i;
   const CAPTION_AUTO_TRACK_PATTERN = /(ai|auto|machine|translated|translation)/i;
 
-  // Pre-joined selector strings — avoids looping per selector on every node check
   const CAPTION_SELECTOR = CAPTION_SELECTORS.join(",");
   const CAPTION_INTERACTIVE_ANCESTOR_SELECTOR = CAPTION_INTERACTIVE_ANCESTOR_SELECTORS.join(",");
   const CAPTION_INTERACTIVE_DESCENDANT_SELECTOR = CAPTION_INTERACTIVE_DESCENDANT_SELECTORS.join(",");
 
-  // Constant event-name array — avoids allocating a new array on every bind/unbind call
   const VIDEO_EVENTS = ["loadedmetadata", "play", "seeked", "durationchange"];
 
   function normalizeLine(text) {
     const s = String(text || "");
     if (!s) return "";
-    // Fast path: single-line subtitle (no \r, no \n) — the overwhelming common case.
-    // Avoids creating split/map/filter/join intermediate arrays on every subtitle node.
     if (!s.includes("\r") && !s.includes("\n")) {
       return s.replace(/\s+/g, " ").trim();
     }
@@ -98,8 +97,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -137,9 +134,6 @@
   }
 
   function isCdnUrl(url) {
-    // CDN subtitle files are public — no cookies needed.
-    // Sending credentials: "include" to a CDN that responds with Access-Control-Allow-Origin: *
-    // causes a CORS block. Only Bilibili API endpoints need cookies.
     try {
       const host = new URL(url).hostname;
       return host.endsWith(".hdslb.com") || host.endsWith(".bilivideo.com");
@@ -148,9 +142,39 @@
     }
   }
 
+  const CAPTION_TRACK_STORE_KEY = "bteSubtitleTracksV1";
+  const CAPTION_TRACK_STORE_LIMIT = 30;
+  const CAPTION_TRACK_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+  function storageGet(key) {
+    const area = globalThis.chrome && chrome.storage && chrome.storage.local;
+    if (!area) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      try {
+        const out = area.get(key, (result) => resolve((result && result[key]) || null));
+        if (out && typeof out.then === "function") {
+          out.then((result) => resolve((result && result[key]) || null), () => resolve(null));
+        }
+      } catch (_error) {
+        resolve(null);
+      }
+    });
+  }
+
+  function storageSet(key, value) {
+    const area = globalThis.chrome && chrome.storage && chrome.storage.local;
+    if (!area) return Promise.resolve();
+    return new Promise((resolve) => {
+      try {
+        const out = area.set({ [key]: value }, () => resolve());
+        if (out && typeof out.then === "function") out.then(() => resolve(), () => resolve());
+      } catch (_error) {
+        resolve();
+      }
+    });
+  }
+
   async function fetchJsonOrText(url) {
-    // CDN files: fetch without credentials to avoid CORS wildcard conflict.
-    // API endpoints: fetch with credentials so Bilibili's auth cookies are sent.
     const credentials = isCdnUrl(url) ? "omit" : "include";
     try {
       const response = await fetch(url, { credentials });
@@ -160,7 +184,6 @@
         return parseJsonOrRaw(text, type);
       }
     } catch (_error) {
-      // Fall through to background fetch (handles CORS-restricted iframes / workers).
     }
     try {
       const bg = await runtimeMessage({
@@ -199,8 +222,6 @@
       this.videoElement = null;
       this.warnedIssues = new Set();
       this.windowPrefetchInFlight = new Map();
-      // Tracks from the page-world bridge, tagged with the href they were seen on so a previous
-      // video's track is never reused after navigation.
       this.bridgeTracks = new Map();
       this.activeLan = "";
       this.bridgeListenerAttached = false;
@@ -208,7 +229,6 @@
       this.handleBridgeMessage = this.handleBridgeMessage.bind(this);
     }
 
-    // Receives subtitle URLs from the page-world bridge and kicks off prefetch immediately.
     handleBridgeMessage(event) {
       if (event.source !== window) return;
       const data = event.data;
@@ -219,7 +239,7 @@
         if (!track) return;
         const url = typeof track === "string" ? track : track.url;
         if (!url || typeof url !== "string") return;
-        if (!/(\.hdslb\.com|\.bilivideo\.com)/i.test(url)) return; // CDN-only, never arbitrary hosts
+        if (!/(\.hdslb\.com|\.bilivideo\.com)/i.test(url)) return;
         if (this.bridgeTracks.has(url)) return;
         this.bridgeTracks.set(url, {
           subtitleUrl: url,
@@ -234,7 +254,6 @@
       } else if (data.kind === "tracks") {
         const tracks = (data.data && data.data.tracks) || [];
         if (Array.isArray(tracks)) tracks.forEach(consider);
-        // Remember which track the player is actually showing, so only that one is translated.
         const activeLan = data.data && data.data.activeLan;
         if (activeLan && activeLan !== this.activeLan) {
           this.activeLan = String(activeLan);
@@ -243,14 +262,11 @@
       } else {
         return;
       }
-      // Only kick off a prefetch when a genuinely NEW track arrived — the bridge re-scans the page
-      // periodically, so without this guard we'd re-trigger prefetch every poll for nothing.
       if (added && this.canRun() && this.isVideoRoute()) {
         this.prefetchCurrentVideo(false).catch(() => {});
       }
     }
 
-    // Subtitle tracks the bridge saw on the current page (ignore stale ones from a prior video).
     getBridgeTracks() {
       const here = location.href;
       const out = [];
@@ -265,7 +281,6 @@
       try {
         window.postMessage({ __bteBridge: true, kind: "requestSubtitles" }, location.origin || "*");
       } catch (_error) {
-        /* ignore */
       }
     }
 
@@ -288,7 +303,6 @@
         window.addEventListener("message", this.handleBridgeMessage);
         this.bridgeListenerAttached = true;
       }
-      // Ask the page-world bridge to report any subtitle tracks it already knows about.
       this.requestBridgeSubtitles();
     }
 
@@ -299,8 +313,6 @@
         this.stop({ restore: true });
         return;
       }
-      // The subtitle cache is keyed by language+engine, so a switch must clear it or the old
-      // language lingers on screen until the next prefetch overwrites it.
       const langChanged = prev && prev.targetLanguage !== nextSettings.targetLanguage;
       const engineChanged = prev && prev.engine !== nextSettings.engine;
       if (this.lastUrl !== location.href || langChanged || engineChanged) {
@@ -310,8 +322,6 @@
       }
       this.start();
       this.bindVideoSignals();
-      // Don't pass forceRefresh — the cache-hit path above handles same-video
-      // updates without blowing away translations already in progress.
       this.prefetchCurrentVideo(false);
       this.applyToActiveSubtitleNodes();
     }
@@ -320,9 +330,6 @@
       return !!(this.running && this.settings && this.settings.enabled && this.settings.areas.captions);
     }
 
-    // "Optimize usage": translate subtitles only as they're watched instead of pre-translating
-    // the whole video, to conserve a keyed engine's quota. Applies to any keyed engine
-    // (DeepL, Baidu, Youdao, Papago) that exposes the optimizeUsage flag and has it enabled.
     isUsageOptimized() {
       const engine = this.settings?.engine;
       const engineConfig = engine ? this.settings?.[engine] : null;
@@ -393,8 +400,6 @@
       this.currentVideoCacheKey = "";
       this.warnedIssues.clear();
       this.windowPrefetchInFlight.clear();
-      // Drop bridge tracks captured on other pages; keep any for the current href so a track that
-      // arrived just before this reset (same video) is still usable.
       if (this.bridgeTracks && this.bridgeTracks.size) {
         const here = location.href;
         this.bridgeTracks.forEach((track, url) => {
@@ -503,12 +508,9 @@
         if (!this.canRun()) return;
         this.applyToActiveSubtitleNodes();
       });
-      this.subtitleObserver.observe(document.body, {
+      this.subtitleObserver.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true,
-        // characterData omitted intentionally: every text change in the entire page
-        // would fire this observer. The 80 ms subtitle poll covers text updates at
-        // negligible latency cost without the page-wide overhead.
       });
     }
 
@@ -523,9 +525,6 @@
       const bvidFromUrl = (pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || null;
       const epIdFromUrl = Number.parseInt((pathname.match(/\/bangumi\/play\/ep(\d+)/) || [])[1] || "", 10) || null;
 
-      // After SPA navigation __INITIAL_STATE__ can still hold the PREVIOUS video's
-      // data. Detect staleness by comparing its bvid against the URL bvid — if they
-      // don't match, treat the state as stale and ignore its bvid/cid.
       const stateBvid =
         state.bvid ||
         state.videoData?.bvid ||
@@ -534,8 +533,6 @@
         null;
       const stateIsStale = !!(bvidFromUrl && stateBvid && stateBvid !== bvidFromUrl);
 
-      // Always prefer the URL bvid (ground truth); fall back to state only when
-      // the state is fresh (same video) or we have no URL bvid.
       const bvid = bvidFromUrl || (!stateIsStale ? stateBvid : null) || playerInfo?.bvid || null;
 
       const epList = Array.isArray(state.epList) ? state.epList : [];
@@ -558,7 +555,6 @@
            playerInfo?.aid ||
            null);
 
-      // Only trust state cid when state bvid matches URL (i.e. state is fresh).
       const cid = stateIsStale
         ? (playerInfo?.cid || cidFromQuery || null)
         : (state.cid ||
@@ -586,6 +582,19 @@
       return `${context?.bvid || context?.aid || "unknown"}::${context?.cid || "unknown"}::p${context?.pageNumber || 1}`;
     }
 
+    async firstResolved(inputs, attempt) {
+      const settled = await Promise.all(
+        inputs.map(async (input) => {
+          try {
+            return await attempt(input);
+          } catch (_error) {
+            return null;
+          }
+        })
+      );
+      return settled.find((value) => value) || null;
+    }
+
     async ensureContextCid(context) {
       if (!context || context.cid) return context;
       const candidates = [];
@@ -598,20 +607,15 @@
         candidates.push(`https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(context.aid)}`);
       }
       if (!candidates.length) return context;
-      // Try up to 3 times with a brief back-off — on SPA navigation the API can
-      // momentarily return stale data before Bilibili's own route handler settles.
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        for (const url of candidates) {
-          try {
-            const payload = await fetchJsonOrText(url);
-            const cid = this.extractCidFromVideoMeta(payload, context.pageNumber);
-            if (!cid) continue;
-            context.cid = cid;
-            context.key = this.buildContextKey(context);
-            return context;
-          } catch (_error) {
-            // keep probing
-          }
+        const cid = await this.firstResolved(candidates, async (url) => {
+          const payload = await fetchJsonOrText(url);
+          return this.extractCidFromVideoMeta(payload, context.pageNumber) || null;
+        });
+        if (cid) {
+          context.cid = cid;
+          context.key = this.buildContextKey(context);
+          return context;
         }
         if (attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 200));
@@ -634,8 +638,6 @@
 
     buildProbeUrls(context) {
       const urls = [];
-      // x/web-interface/view does not require WBI signing and includes data.subtitle.list.
-      // Put it first so the -400 from the WBI-gated player endpoints is never reached.
       if (context.bvid) {
         urls.push(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(context.bvid)}`);
       }
@@ -677,8 +679,6 @@
       const playInfo = window.__playinfo__ || {};
       const state = window.__INITIAL_STATE__ || {};
 
-      // After SPA navigation __INITIAL_STATE__ / __playinfo__ can hold the previous
-      // video's subtitle tracks. Guard against this by checking bvid against the URL.
       const bvidFromUrl = (location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || null;
       const stateBvid = state.bvid || state.videoData?.bvid || playInfo?.data?.bvid || null;
       const stateIsStale = !!(bvidFromUrl && stateBvid && stateBvid !== bvidFromUrl);
@@ -718,7 +718,6 @@
           if (tracks.length) return tracks;
         }
       } catch (_error) {
-        // ignore — player API may not exist
       }
       return tracks;
     }
@@ -761,8 +760,6 @@
       const lan = String(track.lan || "");
       const doc = String(track.lanDoc || "");
       let score = 0;
-      // The track the player is actually showing always wins: translating a different one is both
-      // wrong and wasted work when a video ships several tracks.
       if (this.activeLan && lan && lan === this.activeLan) score += 100;
       if (CAPTION_CJK_LAN_PATTERN.test(lan)) score += 8;
       if (CAPTION_CJK_DOC_PATTERN.test(doc)) score += 8;
@@ -775,21 +772,16 @@
     }
 
     async fetchSubtitleTracks(context) {
-      // The bridge gives the player's own authed URL: works logged in, needs no WBI signing.
       const bridgeTracks = this.getBridgeTracks();
       if (bridgeTracks.length) {
         const ranked = this.rankSubtitleTracks(bridgeTracks);
-        // Once the player tells us which track is on screen, translate ONLY that one.
         const active = this.activeLan && ranked.find((t) => t.lan === this.activeLan);
         return active ? [active] : ranked;
       }
-      // Try the live player object first — it reflects the current video even
-      // during SPA navigation when __INITIAL_STATE__ may still hold stale data.
       const playerTracks = this.getPlayerSubtitleTracks();
       if (playerTracks.length) {
         return this.rankSubtitleTracks(playerTracks);
       }
-      // Embedded tracks from page JS globals (stale-guarded inside getEmbeddedTracks).
       const embedded = this.getEmbeddedTracks();
       if (embedded.length) {
         const parsed = this.parseSubtitleTracks({ data: { subtitle: { subtitles: embedded } } });
@@ -803,28 +795,28 @@
       if (!probeUrls.length) {
         return [];
       }
-      for (const url of probeUrls) {
+      const tracks = await this.firstResolved(probeUrls, async (url) => {
+        let payload = null;
         try {
-          const payload = await fetchJsonOrText(url);
-          if (!payload) continue;
-          if (payload?.code && Number(payload.code) !== 0) {
-            // -400 (WBI signature required) and -404 are expected for a video with no subtitle
-            // track, so stay silent on those.
-            const code = Number(payload.code);
-            if (code !== -400 && code !== -404) {
-              this.warnOnce(`probe-code-${code}`, `Subtitle probe returned code ${code}.`);
-            }
-            continue;
-          }
-          const tracks = this.parseSubtitleTracks(payload);
-          if (tracks.length) {
-            return this.rankSubtitleTracks(tracks);
-          }
+          payload = await fetchJsonOrText(url);
         } catch (error) {
           this.warnOnce(`probe-failed-${url}`, `Subtitle probe request failed: ${url}`, error);
+          return null;
         }
+        if (!payload) return null;
+        if (payload.code && Number(payload.code) !== 0) {
+          const code = Number(payload.code);
+          if (code !== -400 && code !== -404) {
+            this.warnOnce(`probe-code-${code}`, `Subtitle probe returned code ${code}.`);
+          }
+          return null;
+        }
+        const found = this.parseSubtitleTracks(payload);
+        return found.length ? found : null;
+      });
+      if (tracks) {
+        return this.rankSubtitleTracks(tracks);
       }
-      // A single, quiet note — most videos genuinely have no subtitles, so this is normal.
       this.warnOnce("no-subtitle-tracks", "No subtitle tracks for this video.");
       return [];
     }
@@ -873,6 +865,52 @@
       return null;
     }
 
+    subtitleStoreKey(context) {
+      if (!context) return null;
+      const page = Number(context.pageNumber) || 1;
+      if (context.bvid) return `bv:${context.bvid}:p${page}`;
+      if (context.aid) return `av:${context.aid}:p${page}`;
+      return context.cid ? `cid:${context.cid}` : null;
+    }
+
+    async loadStoredSubtitleBody(context) {
+      const key = this.subtitleStoreKey(context);
+      if (!key) return null;
+      try {
+        const store = await storageGet(CAPTION_TRACK_STORE_KEY);
+        const entry = store && store[key];
+        if (!entry || !Array.isArray(entry.body) || !entry.body.length) return null;
+        if (Date.now() - (entry.at || 0) > CAPTION_TRACK_TTL_MS) return null;
+        if (this.activeLan && entry.lan && entry.lan !== this.activeLan) return null;
+        entry.at = Date.now();
+        void storageSet(CAPTION_TRACK_STORE_KEY, store);
+        return entry.body;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    async storeSubtitleBody(context, body, lan) {
+      const key = this.subtitleStoreKey(context);
+      if (!key || !Array.isArray(body) || !body.length) return;
+      const trimmed = body
+        .map((line) => ({ from: line.from, to: line.to, content: line.content }))
+        .filter((line) => line.content);
+      if (!trimmed.length) return;
+      try {
+        const store = (await storageGet(CAPTION_TRACK_STORE_KEY)) || {};
+        store[key] = { body: trimmed, at: Date.now(), lan: lan || null };
+        const keys = Object.keys(store);
+        if (keys.length > CAPTION_TRACK_STORE_LIMIT) {
+          keys
+            .sort((a, b) => (store[a].at || 0) - (store[b].at || 0))
+            .slice(0, keys.length - CAPTION_TRACK_STORE_LIMIT)
+            .forEach((stale) => delete store[stale]);
+        }
+        await storageSet(CAPTION_TRACK_STORE_KEY, store);
+      } catch (_error) {
+      }
+    }
 
     buildVideoCacheKey(context) {
       const engine = this.settings?.engine || "google";
@@ -897,9 +935,125 @@
       });
     }
 
+    buildSentenceGroups(timed) {
+      const groups = [];
+      const groupOf = new Map();
+      let current = null;
+
+      const close = () => {
+        if (!current) return;
+        current.text = current.lines.join("");
+        current.lines.forEach((line) => {
+          if (!groupOf.has(line)) groupOf.set(line, current);
+        });
+        groups.push(current);
+        current = null;
+      };
+
+      timed.forEach((entry, index) => {
+        const line = entry.original;
+        if (!line) {
+          close();
+          return;
+        }
+        const previous = index > 0 ? timed[index - 1] : null;
+        const joinable =
+          current &&
+          previous &&
+          current.lines.length < CAPTION_SENTENCE_MAX_LINES &&
+          current.lines.join("").length + line.length <= CAPTION_SENTENCE_MAX_CHARS &&
+          !CAPTION_SENTENCE_END.test(previous.original) &&
+          !CAPTION_SENTENCE_START_BREAK.test(line) &&
+          Number(entry.from) - Number(previous.to) <= CAPTION_SENTENCE_MAX_GAP_SECONDS &&
+          this.containsCjkText(previous.original) &&
+          this.containsCjkText(line);
+
+        if (joinable) {
+          current.lines.push(line);
+          current.to = entry.to;
+          return;
+        }
+        close();
+        current = { lines: [line], from: entry.from, to: entry.to, text: line };
+      });
+      close();
+
+      return { groups, groupOf };
+    }
+
+    splitTranslationAcross(translation, sourceLines) {
+      const text = String(translation || "").trim();
+      if (!text || sourceLines.length < 2) return null;
+      const words = text.split(/(\s+)/).filter((part) => part !== "");
+      const wordCount = words.filter((part) => !/^\s+$/.test(part)).length;
+      if (wordCount < sourceLines.length) return null;
+
+      const totalSource = sourceLines.reduce((sum, line) => sum + line.length, 0);
+      if (!totalSource) return null;
+
+      const pieces = [];
+      let cursor = 0;
+      let consumed = 0;
+      for (let i = 0; i < sourceLines.length; i += 1) {
+        if (i === sourceLines.length - 1) {
+          pieces.push(words.slice(cursor).join("").trim());
+          break;
+        }
+        consumed += sourceLines[i].length;
+        const target = (consumed / totalSource) * text.length;
+        let taken = words.slice(0, cursor).join("").length;
+        let end = cursor;
+        while (end < words.length && taken < target) {
+          taken += words[end].length;
+          end += 1;
+        }
+        const remainingCues = sourceLines.length - i - 1;
+        end = Math.max(cursor + 1, Math.min(end, words.length - remainingCues));
+        pieces.push(words.slice(cursor, end).join("").trim());
+        cursor = end;
+      }
+      if (pieces.some((piece) => !piece)) return null;
+      return pieces;
+    }
+
+    resolveSentenceUnits(payload, lines) {
+      const units = [];
+      const seen = new Set();
+      lines.forEach((raw) => {
+        const line = normalizeLine(raw);
+        if (!line) return;
+        const group = payload?.groupOf?.get(line);
+        if (!group || group.lines.length < 2) {
+          if (seen.has(line)) return;
+          seen.add(line);
+          units.push({ text: line, lines: [line] });
+          return;
+        }
+        if (seen.has(group.text)) return;
+        seen.add(group.text);
+        units.push({ text: group.text, lines: group.lines.slice() });
+      });
+      return units;
+    }
+
+    distributeUnitTranslation(payload, unit, translation) {
+      if (!translation) return 0;
+      if (unit.lines.length < 2) {
+        payload.map.set(unit.lines[0], translation);
+        return 1;
+      }
+      const pieces = this.splitTranslationAcross(translation, unit.lines);
+      if (pieces) {
+        unit.lines.forEach((line, index) => payload.map.set(line, pieces[index]));
+      } else {
+        unit.lines.forEach((line) => payload.map.set(line, translation));
+      }
+      payload.map.set(unit.text, translation);
+      return unit.lines.length;
+    }
+
     selectPriorityLines(timed, uniqueLines) {
       const now = this.getVideoCurrentTime();
-      // timed[] is already sorted by 'from' (built directly from the API response order)
       const preferred = [];
       const seen = new Set();
 
@@ -944,7 +1098,6 @@
       const timed = this.currentSubtitleData.timed;
       if (!timed.length) return null;
 
-      // Binary search — timed[] is sorted by 'from'
       let lo = 0;
       let hi = timed.length - 1;
       while (lo <= hi) {
@@ -954,11 +1107,10 @@
         } else if (timed[mid].from > time) {
           hi = mid - 1;
         } else {
-          return timed[mid]; // time is within [from, to]
+          return timed[mid];
         }
       }
 
-      // No exact match — scan the narrow vicinity of the insertion point for nearest
       let nearest = null;
       let nearestDelta = Infinity;
       const start = Math.max(0, lo - 1);
@@ -998,8 +1150,6 @@
 
     shouldWaitForPrefetchForLine(line) {
       if (!this.currentSubtitleData || this.currentSubtitleData.prefetchPhase === "complete") return false;
-      // Give startup prefetch a brief head start, then allow the active line to fall back
-      // to an immediate request instead of staying untranslated on screen.
       if (Date.now() - (this.currentSubtitleData.createdAt || 0) > CAPTION_PREFETCH_GRACE_MS) {
         return false;
       }
@@ -1031,6 +1181,24 @@
       }, 40);
     }
 
+    findTimedIndexAt(timed, time) {
+      let lo = 0;
+      let hi = timed.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (timed[mid].to < time) lo = mid + 1;
+        else if (timed[mid].from > time) hi = mid - 1;
+        else return mid;
+      }
+      return Math.min(lo, timed.length - 1);
+    }
+
+    captionLineLead(payload, line, now) {
+      const group = payload?.groupOf?.get(line);
+      const from = group ? Number(group.from) : NaN;
+      return Number.isFinite(from) ? from - now : 0;
+    }
+
     getWindowCandidateLines(payload, focusLine) {
       if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return [];
       const out = [];
@@ -1047,35 +1215,21 @@
       if (normalizedFocus) add(normalizedFocus);
 
       const now = this.getVideoCurrentTime();
-      payload.timed.forEach((entry) => {
-        const inWindow =
-          entry.to >= now - CAPTION_WINDOW_BEHIND_SECONDS &&
-          entry.from <= now + CAPTION_WINDOW_AHEAD_SECONDS;
-        if (inWindow) add(entry.original);
-      });
+      const timed = payload.timed;
+      const pivot = this.findTimedIndexAt(timed, now);
 
-      if (out.length < CAPTION_WINDOW_PREFETCH_LINES) {
-        // Binary search for current playback position in sorted timed[]
-        let lo = 0;
-        let hi = payload.timed.length - 1;
-        let pivot = -1;
-        while (lo <= hi) {
-          const mid = (lo + hi) >>> 1;
-          if (payload.timed[mid].to < now) {
-            lo = mid + 1;
-          } else if (payload.timed[mid].from > now) {
-            hi = mid - 1;
-          } else {
-            pivot = mid;
-            break;
-          }
+      let examined = 0;
+      for (let i = pivot; i < timed.length && out.length < CAPTION_WINDOW_PREFETCH_LINES; i += 1) {
+        if (timed[i].from > now + CAPTION_WINDOW_AHEAD_SECONDS && examined >= CAPTION_LOOKAHEAD_UNITS * 2) {
+          break;
         }
-        if (pivot < 0) pivot = lo; // insertion point = first line starting after now
-        if (pivot >= payload.timed.length) pivot = payload.timed.length - 1;
-        const start = Math.max(0, pivot - 3);
-        for (let i = start; i < payload.timed.length && out.length < CAPTION_WINDOW_PREFETCH_LINES; i += 1) {
-          add(payload.timed[i].original);
-        }
+        examined += 1;
+        add(timed[i].original);
+      }
+
+      for (let i = pivot - 1; i >= 0 && out.length < CAPTION_WINDOW_PREFETCH_LINES; i -= 1) {
+        if (timed[i].to < now - CAPTION_WINDOW_BEHIND_SECONDS) break;
+        add(timed[i].original);
       }
 
       return out.slice(0, CAPTION_WINDOW_PREFETCH_LINES);
@@ -1083,25 +1237,23 @@
 
     enqueueWindowPrefetch(cacheKey, payload, focusLine) {
       if (!payload || this.currentVideoCacheKey !== cacheKey) return;
-      // All lines already translated — getWindowCandidateLines would iterate timed[] (500+ entries)
-      // every 80 ms for nothing. Skip the work entirely.
       if (payload.prefetchPhase === "complete") return;
       const candidates = this.getWindowCandidateLines(payload, focusLine);
       if (!candidates.length) return;
 
       const uncached = [];
       let hadCacheHit = false;
-      candidates.forEach((source) => {
-        const hit = this.translationManager.peekCached(source, {
+      this.resolveSentenceUnits(payload, candidates).forEach((unit) => {
+        const hit = this.translationManager.peekCached(unit.text, {
           area: "captions",
           targetLanguage: this.settings?.targetLanguage || "en",
         });
         if (hit.translation) {
-          payload.map.set(source, hit.translation);
+          this.distributeUnitTranslation(payload, unit, hit.translation);
           hadCacheHit = true;
           return;
         }
-        uncached.push(source);
+        uncached.push(unit.lines[0]);
       });
       if (hadCacheHit) {
         this.schedulePartialRefresh(cacheKey, payload);
@@ -1122,35 +1274,67 @@
           this.currentVideoCacheKey === cacheKey &&
           this.canRun()
         ) {
-          const batch = Array.from(payload.windowQueue).slice(0, CAPTION_WINDOW_PREFETCH_LINES);
+          const now = this.getVideoCurrentTime();
+          const ranked = [];
+          payload.windowQueue.forEach((line) => {
+            if (payload.map.has(line)) {
+              payload.windowQueue.delete(line);
+              return;
+            }
+            const lead = this.captionLineLead(payload, line, now);
+            if (lead < -CAPTION_WINDOW_BEHIND_SECONDS) {
+              payload.windowQueue.delete(line);
+              return;
+            }
+            ranked.push({ line, rank: lead >= 0 ? lead : 1e6 - lead });
+          });
+          if (!ranked.length) break;
+          ranked.sort((a, b) => a.rank - b.rank);
+          if (ranked[0].rank > CAPTION_URGENT_LEAD_SECONDS && ranked.length < CAPTION_MIN_BATCH_LINES) {
+            break;
+          }
+          const batch = ranked.slice(0, CAPTION_WINDOW_PREFETCH_LINES).map((item) => item.line);
           batch.forEach((line) => payload.windowQueue.delete(line));
-          await this.translateCaptionLineSet(cacheKey, payload, batch);
+
+          const units = this.resolveSentenceUnits(payload, batch);
+          const headLines = new Set();
+          if (units.length > CAPTION_LOOKAHEAD_UNITS + 1) {
+            units.slice(0, CAPTION_LOOKAHEAD_UNITS).forEach((unit) => {
+              unit.lines.forEach((line) => headLines.add(line));
+            });
+          } else {
+            batch.forEach((line) => headLines.add(line));
+          }
+          const tail = batch.filter((line) => !headLines.has(line));
+          const headTask = this.translateCaptionLineSet(cacheKey, payload, Array.from(headLines));
+          const tailTask = tail.length
+            ? this.translateCaptionLineSet(cacheKey, payload, tail).catch((error) => {
+                this.warnOnce(`window-prefetch-tail-${cacheKey}`, "Caption prefetch batch failed.", error);
+              })
+            : null;
+          await headTask;
+          if (tailTask) await tailTask;
         }
-      })().finally(() => {
-        this.windowPrefetchInFlight.delete(cacheKey);
-      });
+      })()
+        .catch((error) => {
+          this.warnOnce(`window-prefetch-${cacheKey}`, "Caption prefetch loop stopped.", error);
+        })
+        .finally(() => {
+          this.windowPrefetchInFlight.delete(cacheKey);
+        });
       this.windowPrefetchInFlight.set(cacheKey, worker);
     }
 
-    // Deliberately does nothing. Pre-translating a whole video cost hundreds of requests up front,
-    // competed with the page for the engine, and most of it was never watched. The rolling window
-    // ahead of the playhead (enqueueWindowPrefetch) plus the on-demand fallback cover what is seen.
     ensureBackgroundFullPrefetch() {}
 
     async translateCaptionLineSet(cacheKey, payload, lines) {
       if (!lines.length) return;
-      const deduped = Array.from(
-        new Set(
-          lines
-            .map((line) => normalizeLine(line))
-            .filter((line) => !!line && !(payload?.map && payload.map.has(line)))
-        )
+      const units = this.resolveSentenceUnits(payload, lines).filter(
+        (unit) => !unit.lines.every((line) => payload?.map && payload.map.has(line))
       );
-      if (!deduped.length) return;
-      // Build a reverse index: preprocessed text → original deduped line key.
-      // translateMany preprocesses each input before sending to the engine, so onPartial.source
-      // is the preprocessed form. We need to map it back to the original subtitle content key
-      // (what resolveTranslationForLine will look up) to avoid a key mismatch.
+      if (!units.length) return;
+      const deduped = units.map((unit) => unit.text);
+      const unitByText = new Map(units.map((unit) => [unit.text, unit]));
       const preprocessedToOriginal = new Map();
       if (typeof this.translationManager.preprocessInputText === "function" &&
           typeof this.translationManager.normalizeText === "function") {
@@ -1167,27 +1351,58 @@
         targetLanguage: this.settings.targetLanguage,
         sourceLanguage: "zh-CN",
         skipKnownTranslated: false,
-        // Captions are what the viewer is watching right now — always translate them ahead of
-        // page/comment text at the engine's paced scheduler.
         priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
         onPartial: ({ source, translation }) => {
           if (!translation || this.currentVideoCacheKey !== cacheKey) return;
           const normalizedSource = normalizeLine(source);
           if (!normalizedSource) return;
           const originalKey = preprocessedToOriginal.get(normalizedSource) || normalizedSource;
-          payload.map.set(originalKey, translation);
-          if (originalKey !== normalizedSource) payload.map.set(normalizedSource, translation);
-          translatedCount += 1;
+          const unit = unitByText.get(originalKey) || unitByText.get(normalizedSource);
+          if (unit) {
+            translatedCount += this.distributeUnitTranslation(payload, unit, translation);
+          } else {
+            payload.map.set(originalKey, translation);
+            if (originalKey !== normalizedSource) payload.map.set(normalizedSource, translation);
+            translatedCount += 1;
+          }
           this.schedulePartialRefresh(cacheKey, payload);
         },
       });
-      deduped.forEach((line, index) => {
+      const unresolved = [];
+      units.forEach((unit, index) => {
         const translation = translated[index]?.translation || null;
-        if (!translation) return;
-        payload.map.set(line, translation);
-        translatedCount += 1;
+        if (!translation) {
+          if (unit.lines.length > 1) unresolved.push(unit);
+          return;
+        }
+        translatedCount += this.distributeUnitTranslation(payload, unit, translation);
       });
       this.schedulePartialRefresh(cacheKey, payload);
+
+      if (unresolved.length && this.currentVideoCacheKey === cacheKey) {
+        const singles = [];
+        unresolved.forEach((unit) => {
+          unit.lines.forEach((line) => {
+            if (!payload.map.has(line)) singles.push(line);
+          });
+        });
+        if (singles.length) {
+          const retry = await this.translationManager.translateMany(singles, {
+            area: "captions",
+            targetLanguage: this.settings.targetLanguage,
+            sourceLanguage: "zh-CN",
+            skipKnownTranslated: false,
+            priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
+          });
+          singles.forEach((line, index) => {
+            const translation = retry[index]?.translation || null;
+            if (!translation) return;
+            payload.map.set(line, translation);
+            translatedCount += 1;
+          });
+          this.schedulePartialRefresh(cacheKey, payload);
+        }
+      }
       if (translatedCount === 0) {
         this.warnOnce(
           `translate-empty-${cacheKey}`,
@@ -1205,12 +1420,14 @@
         this.lastPrefetchAttempt = Date.now();
         return;
       }
-      context = await this.ensureContextCid(context);
+      const storedBody = await this.loadStoredSubtitleBody(context);
+      if (!storedBody) {
+        context = await this.ensureContextCid(context);
+      }
       const cacheKey = this.buildVideoCacheKey(context);
       this.lastPrefetchAttempt = Date.now();
 
       if (this.currentVideoCacheKey === cacheKey && this.currentSubtitleData) {
-        // Same video already active — re-apply in case DOM changed, but don't re-fetch.
         this.applyToActiveSubtitleNodes();
         this.ensureBackgroundFullPrefetch(cacheKey, this.currentSubtitleData);
         this.enqueueWindowPrefetch(cacheKey, this.currentSubtitleData);
@@ -1242,19 +1459,23 @@
 
       const taskStartHref = location.href;
       const task = (async () => {
-        const tracks = await this.fetchSubtitleTracks(context);
-        if (!tracks.length) {
-          this.warnOnce("no-tracks", "BTE: Subtitle tracks were not found for the current video.");
-          return;
+        let primaryBody = storedBody;
+        if (!primaryBody) {
+          const tracks = await this.fetchSubtitleTracks(context);
+          if (!tracks.length) {
+            this.warnOnce("no-tracks", "BTE: Subtitle tracks were not found for the current video.");
+            return;
+          }
+
+          const primary = await this.fetchPrimaryBody(tracks);
+          if (!primary || !primary.body.length) {
+            this.warnOnce("no-track-body", "BTE: Subtitle tracks were found but subtitle body download failed.");
+            return;
+          }
+          primaryBody = primary.body;
+          void this.storeSubtitleBody(context, primaryBody, tracks[primary.index] && tracks[primary.index].lan);
         }
 
-        const primary = await this.fetchPrimaryBody(tracks);
-        if (!primary || !primary.body.length) {
-          this.warnOnce("no-track-body", "BTE: Subtitle tracks were found but subtitle body download failed.");
-          return;
-        }
-
-        const primaryBody = primary.body;
         const seen = new Set();
         const uniqueLines = this.collectUniqueLinesFromBody(primaryBody, seen);
         if (!uniqueLines.length) {
@@ -1264,11 +1485,14 @@
 
         const map = new Map();
         const timed = this.buildTimedEntries(primaryBody, map);
+        const { groups, groupOf } = this.buildSentenceGroups(timed);
 
         const payload = {
           context,
           map,
           timed,
+          groups,
+          groupOf,
           sourceSet: seen,
           prefetchPhase: "initial",
           createdAt: Date.now(),
@@ -1276,9 +1500,6 @@
         if (!this.running || !this.settings?.enabled || !this.settings?.areas?.captions || !this.isVideoRoute()) {
           return;
         }
-        // Abort if the user navigated away while we were fetching.
-        // Compare URLs rather than cache keys — our stale-state detection may produce
-        // a different key for the same video if __INITIAL_STATE__ updated mid-fetch.
         if (location.href !== taskStartHref) {
           return;
         }
@@ -1292,8 +1513,6 @@
         const criticalLines = priorityLines.slice(0, CAPTION_CRITICAL_LINES);
         const nearLines = priorityLines.slice(CAPTION_CRITICAL_LINES);
 
-        // Don't block the rest of the pipeline behind the critical batch; the scheduler already
-        // orders captions first, so the near batch just queues behind them.
         const criticalTask = this.translateCaptionLineSet(cacheKey, payload, criticalLines);
         if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
           void this.translateCaptionLineSet(cacheKey, payload, nearLines).catch(() => {});
@@ -1308,15 +1527,9 @@
         void (async () => {
           payload.prefetchSequenceRunning = true;
           try {
-            // nearLines were already dispatched in parallel above; translateCaptionLineSet skips
-            // anything already in payload.map, so this is a no-op if they finished first.
             if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
               await this.translateCaptionLineSet(cacheKey, payload, nearLines);
             }
-            // Stop here. Everything past the immediate vicinity is handled by the rolling window
-            // ahead of the playhead, so the rest of the video (and the alternate tracks) is never
-            // translated up front — that used hundreds of requests and starved the page.
-            // "Optimize usage" now only shrinks the window further.
             if (!this.isUsageOptimized() && this.currentVideoCacheKey === cacheKey) {
               const excluded = new Set([...priorityLines]);
               const futureChunk = this.collectFuturePrefetchLines(payload, excluded);
@@ -1354,12 +1567,6 @@
         const comparableHit = this.currentSubtitleData.map.get(comparable);
         if (comparableHit) return comparableHit;
       }
-      // Time-based active line: ONLY usable as this line's translation when the active
-      // line's source text actually matches the on-screen text. Returning the active
-      // line's translation for a non-matching line is what causes cross-line/cross-video
-      // contamination (unrelated English under the current Chinese, flickering as the map
-      // fills in). When nothing matches we return null so the caller translates the real
-      // on-screen text instead of borrowing a neighbor's translation.
       const active = this.findActiveTimedLine(this.getVideoCurrentTime());
       if (!active || !active.translated) return null;
       const activeComparable = this.extractComparableCaptionText(active.original);
@@ -1446,6 +1653,7 @@
       }
       if (this.currentSubtitleData && this.currentVideoCacheKey) {
         this.enqueueWindowPrefetch(this.currentVideoCacheKey, this.currentSubtitleData, normalized);
+        if (this.resolveTranslationForLine(normalized)) return;
       }
       const key = `${this.settings?.targetLanguage || "en"}::${normalized}`;
       if (this.fallbackPending.has(key)) return;
@@ -1465,7 +1673,6 @@
           targetLanguage: this.settings?.targetLanguage || "en",
           sourceLanguage: "zh-CN",
           skipKnownTranslated: false,
-          // On-demand caption line the viewer is seeing now — highest priority.
           priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
           onPartial: ({ source, translation }) => {
             if (!translation || !this.currentSubtitleData) return;
@@ -1612,7 +1819,6 @@
         return false;
       }
       if (element.childElementCount > 0 && !this.hasOnlyLineBreakChildren(element)) {
-        // Keep subtitle tool/panel structure untouched. Allow BR-only caption lines.
         return false;
       }
       return true;
@@ -1628,7 +1834,6 @@
       if (!live) return;
 
       if (state.injected && live === state.injected && state.original) {
-        // keep source line
       } else {
         state.original = normalizedSource;
         state.hadLineBreak = this.hasVisualLineBreaks(element, sourceText);
@@ -1667,13 +1872,11 @@
         } else if (!this.shouldWaitForPrefetchForLine(state.original)) {
           this.queueFallbackCaptionTranslation(state.original);
         }
-        // Keep the original line on screen while fetching rather than blanking it.
         if (state.injected && live === state.injected && state.original && live !== state.original) {
           element.textContent = state.original;
           state.injected = state.original;
         }
         this.setCaptionWaitingVisibility(element, state, false);
-        // Showing the untranslated original — never blur that.
         element.classList.remove("bte-caption-blur");
         return;
       }
@@ -1696,7 +1899,6 @@
         element.textContent = output;
       }
       state.injected = output;
-      // Replace mode only; in bilingual modes the original is already visible.
       const blurLearn = !!(this.settings && this.settings.learn && this.settings.learn.blurCaption) &&
         (this.settings?.bilingual?.captions || "off") === "off";
       element.classList.toggle("bte-caption-blur", blurLearn);
@@ -1717,9 +1919,6 @@
         nodes.add(node);
       };
       document.querySelectorAll(CAPTION_SELECTOR).forEach(addIfSafe);
-      // Narrow fallback: walk CJK text nodes inside subtitle containers ONLY.
-      // We intentionally do NOT walk #bilibili-player broadly — that picks up
-      // player controls, buttons, menus, tooltips, and other UI text.
       if (nodes.size === 0) {
         const subtitleRoot = document.querySelector(
           ".bpx-player-subtitle-wrap, .bpx-player-subtitle-panel, " +
@@ -1734,7 +1933,6 @@
             if (!/[\u4e00-\u9fff]/.test(val)) continue;
             const parent = textNode.parentElement;
             if (!parent || parent.childElementCount > 0) continue;
-            // Skip if inside any interactive ancestor (controls, buttons, links, menus)
             if (parent.closest(CAPTION_INTERACTIVE_ANCESTOR_SELECTOR)) continue;
             addIfSafe(parent);
           }
@@ -1752,7 +1950,6 @@
         .bpx-player-subtitle-wrap, .bilibili-player-video-subtitle {
           text-rendering: optimizeLegibility;
         }
-        /* Blur the translation until hovered, so the Chinese is read first. */
         .bte-caption-blur {
           filter: blur(6px);
           transition: filter .12s ease;

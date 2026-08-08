@@ -4,9 +4,6 @@
   const EDGE_AUTH_URL = "https://edge.microsoft.com/translate/auth";
   const API_URL = "https://api.cognitive.microsofttranslator.com/translate";
   const API_VERSION = "3.0";
-  // The free Edge token endpoint answers 404 for non-Edge clients, so the keyless path is Bing's
-  // own web translator: scrape IG / IID / token+key, then POST to ttranslatev3.
-  // NOTE: this requires a browser User-Agent — without one the response is 200 with an empty body.
   const BING_HOME = "https://www.bing.com/translator";
   const BING_TOKEN_TTL_MS = 8 * 60 * 1000;
 
@@ -19,8 +16,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -53,7 +48,6 @@
         return json.exp * 1000;
       }
     } catch (_error) {
-      // fall through
     }
     return Date.now() + 8 * 60 * 1000;
   }
@@ -75,20 +69,16 @@
       this.authToken = "";
       this.authExpiresAt = 0;
       this.authPromise = null;
-      // Escalating cooldown (2 min doubling to 30) so a persistently-broken endpoint is retried
-      // rarely; resets on success.
       this.authFailedUntil = 0;
       this.authBaseCooldownMs = 2 * 60 * 1000;
       this.authMaxCooldownMs = 30 * 60 * 1000;
       this.authCooldownMs = this.authBaseCooldownMs;
       this.authFailStreak = 0;
-      // Bing web-translator credentials (scraped, no API key needed).
       this.bing = { ig: "", iid: "", token: "", key: "", host: "https://www.bing.com/", at: 0, count: 0 };
       this.bingPromise = null;
       this.lastError = null;
     }
 
-    // Scrape the Bing translator page for the request credentials its front-end uses.
     async ensureBingTokens(force) {
       if (!force && this.bing.ig && this.bing.token && Date.now() - this.bing.at < BING_TOKEN_TTL_MS) {
         return this.bing;
@@ -111,14 +101,9 @@
       return this.bingPromise;
     }
 
-    // Bing translates a whole batch in ONE request when the items are newline-joined (it preserves
-    // the line breaks in the output). Sending one request per string — which this used to do —
-    // floods the network and is far slower.
     async translateWithBingWeb(texts, options) {
       const target = this.normalizeTarget(options?.targetLanguage);
       const rawSource = String(options?.sourceLanguage || "").trim();
-      // Never auto-detect: on short CJK strings Bing guesses wrong (it has returned Arabic for
-      // Chinese input). The source here is always Chinese unless the caller says otherwise.
       const from = !rawSource || rawSource === "auto" || rawSource === "auto-detect"
         ? "zh-Hans"
         : (rawSource.toLowerCase().startsWith("zh") ? "zh-Hans" : rawSource);
@@ -138,7 +123,6 @@
           throw Object.assign(new Error(`Bing rate limited (${res.status})`), { status: res.status });
         }
         const payload = parseJsonSafe(res.text);
-        // statusCode 205 means the scraped tokens went stale — refresh once and retry.
         const statusCode = payload?.StatusCode || payload?.statusCode || 200;
         if (statusCode === 205 && !retried) {
           await this.ensureBingTokens(true);
@@ -152,12 +136,6 @@
         `&text=${encodeURIComponent(value)}` +
         `&token=${encodeURIComponent(tokens.token)}&key=${encodeURIComponent(tokens.key)}`;
 
-      // Bing routes through an LLM (`usedLLM: true`), which sometimes REFLOWS sentences and drops
-      // the separators — the same input can split correctly one call and merge the next. So the
-      // separator is a distinctive marker on its own line (survives far more often than a bare
-      // newline), and when a response still comes back mis-sized we split the batch in HALF and
-      // retry rather than firing one request per item. That bounds the worst case to roughly
-      // 2x requests instead of N, which is what previously flooded the network.
       const flat = texts.map((t) => String(t || "").replace(/\s*\n+\s*/g, " "));
       if (!flat.some((t) => t.trim())) return texts.map(() => null);
 
@@ -176,7 +154,6 @@
         if (parts.length === items.length) {
           return items.map((input, i) => this.sanitizeOutput(parts[i], input));
         }
-        // Mis-sized: halve and retry so one bad response costs 2 requests, not `items.length`.
         if (depth >= 4) return items.map(() => null);
         const mid = Math.ceil(items.length / 2);
         const [left, right] = await Promise.all([
@@ -191,8 +168,6 @@
       return out;
     }
 
-    // AIMD pacing (see RateGovernor): the Edge/Azure endpoints also rate-limit; back off fast on
-    // a 429/503 and recover gradually so we settle just under the limit. No effect when healthy.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -201,8 +176,6 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Shared paced, priority-aware scheduler (see RateGovernor.schedule): each request chunk runs
-    // in one paced slot, and higher-priority (caption) chunks run ahead of page text.
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
@@ -215,8 +188,6 @@
       })
         .then(async (response) => {
           if (!response.ok) {
-            // Carry the HTTP status so the manager treats this as a soft (engine-specific)
-            // failure that falls back — not a hard "internet is down" network failure.
             throw Object.assign(new Error(`Edge auth failed (${response.status})`), { status: response.status });
           }
           const token = String(response.text || "").trim();
@@ -285,10 +256,7 @@
       if (this.authToken && Date.now() + skewMs < this.authExpiresAt) {
         return this.authToken;
       }
-      // Recent auth failure — fail fast so the manager falls back immediately instead of
-      // waiting on (and re-triggering) the broken endpoint on every batch.
       if (Date.now() < this.authFailedUntil) {
-        // Soft status (503) so this deliberate skip is a fall-back, not a hard network failure.
         throw Object.assign(new Error("Edge auth temporarily unavailable"), { status: 503 });
       }
       return this.fetchEdgeAuthToken();
@@ -318,7 +286,6 @@
     }
 
     async performTranslateRequest(url, body, headers) {
-      // Pacing is handled by the shared scheduler (schedule()); this just issues the request.
       const response = await this.request(url, {
         method: "POST",
         headers,
@@ -381,11 +348,6 @@
       }
     }
 
-    // Split into per-request chunks that respect the API's element/character limits. Needed
-    // because the manager may hand Microsoft an oversized batch when it is a *fallback* for
-    // another engine (e.g. a DeepL-sized batch of up to 50 items / 110k chars) — a single
-    // request that large is rejected by the API. Microsoft's own primary batches are already
-    // sized to these limits, so this is a no-op on the common path.
     buildGroups(texts) {
       const groups = [];
       let current = [];
@@ -424,16 +386,12 @@
     }
 
     async translateChunk(safeTexts, options) {
-      // Azure key present → try it first, fall through to the free paths on Azure error.
       if (options?.microsoftUseAzure && String(options?.microsoftApiKey || "").trim()) {
         try {
           return await this.translateWithAzure(safeTexts, options);
         } catch (_azureError) {
-          // fall through to the keyless paths
         }
       }
-      // Bing's web translator is the reliable keyless route (the Edge token endpoint answers 404
-      // for non-Edge clients). Try it first, and only then the Edge token as a legacy fallback.
       try {
         const out = await this.translateWithBingWeb(safeTexts, options);
         this.lastError = null;
@@ -442,7 +400,6 @@
         try {
           return await this.translateWithEdgeToken(safeTexts, options);
         } catch (edgeError) {
-          // Report the more meaningful of the two, so the popup can explain the fallback.
           this.lastError = "unavailable";
           throw edgeError?.status ? edgeError : bingError;
         }

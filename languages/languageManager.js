@@ -35,7 +35,7 @@ class LanguageManager {
         }
 
         this.currentLanguage = langCode;
-        
+
         switch(langCode) {
             case 'en':
                 this.dictionary = enDictionary;
@@ -71,11 +71,6 @@ class LanguageManager {
                 this.dictionary = enDictionary;
         }
 
-        // Deliberately does NOT persist. SettingsManager is the single writer for the language
-        // (it stores targetLanguage and mirrors selectedLanguage in the same write). Writing here
-        // too raced with that: whichever landed first fired a storage-change, and a refresh that
-        // saw the new selectedLanguage but the old bteSettingsV2 would re-emit the PREVIOUS
-        // language and visibly revert the UI.
         return true;
     }
 
@@ -87,9 +82,6 @@ class LanguageManager {
         if (this.dictionary[lower]) return this.dictionary[lower];
         const normalized = lower.replace(/\s+/g, ' ').trim();
         if (this.dictionary[normalized]) return this.dictionary[normalized];
-        // Final fallback: ignore surrounding punctuation/whitespace so a single manual
-        // dictionary entry (e.g. "返回") also matches "返回。", " 返回 ", "返回!", etc.
-        // — this is the common case for short button/label overrides.
         const stripped = text.replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, '');
         if (stripped && stripped !== text) {
             return this.dictionary[stripped] || this.dictionary[stripped.toLowerCase()] || null;
@@ -113,4 +105,4 @@ class LanguageManager {
 }
 
 const languageManager = new LanguageManager();
-window.languageManager = languageManager; 
+window.languageManager = languageManager;

@@ -5,8 +5,6 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // After an extension reload the already-injected scripts keep running but chrome.runtime.id
-  // becomes undefined and sendMessage throws. Callers check this to fail fast and stay silent.
   ROOT.isExtensionAlive = function isExtensionAlive() {
     try {
       return !!(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id);
@@ -15,9 +13,6 @@
     }
   };
 
-  // AIMD pacing: back off fast on a 429, recover one step per success so the rate settles just
-  // under the provider's limit. While healthy, interval === baseIntervalMs and jitter is 0, so
-  // there is no added latency.
   const RateGovernor = {
     rateLimited(engine) {
       engine.consecutiveFailures = Math.min((engine.consecutiveFailures || 0) + 1, 6);
@@ -35,16 +30,11 @@
       }
     },
 
-    // De-synchronises bursts across frames/tabs, but only while recovering. Engines without
-    // baseIntervalMs (fixed-pace, e.g. DeepL) always get 0 so their spacing is never perturbed.
     jitter(engine) {
       if (!(engine.baseIntervalMs > 0) || engine.minIntervalMs <= engine.baseIntervalMs) return 0;
       return Math.random() * engine.minIntervalMs * 0.25;
     },
 
-    // One paced queue per engine. When the pacing gate opens the highest-priority task runs next
-    // (captions before page text), FIFO among equal priorities. Pacing is unchanged — this only
-    // decides who goes first when there is a backlog.
     schedule(engine, task, priority) {
       if (!engine._pq) engine._pq = [];
       return new Promise((resolve, reject) => {
@@ -57,6 +47,11 @@
         });
         this._pump(engine);
       });
+    },
+
+    maxConcurrent(engine) {
+      if (engine.maxConcurrent > 0) return engine.maxConcurrent;
+      return engine.consecutiveFailures > 0 ? 1 : 4;
     },
 
     async _pump(engine) {
@@ -74,17 +69,26 @@
               best = i;
             }
           }
+          const capacity = this.maxConcurrent(engine);
+          const captionPriority = (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100;
+          const limit =
+            queue[best].priority >= captionPriority ? capacity : Math.max(1, capacity - 1);
+          if ((engine._pqInFlight || 0) >= limit) break;
+
           const item = queue.splice(best, 1)[0];
           const elapsed = Date.now() - (engine.lastRequestAt || 0);
           let waitMs = Math.max(0, (engine.minIntervalMs || 0) - elapsed);
           waitMs += this.jitter(engine) || 0;
           if (waitMs > 0) await sleep(waitMs);
           engine.lastRequestAt = Date.now();
-          try {
-            item.resolve(await item.task());
-          } catch (error) {
-            item.reject(error);
-          }
+          engine._pqInFlight = (engine._pqInFlight || 0) + 1;
+          Promise.resolve()
+            .then(() => item.task())
+            .then(item.resolve, item.reject)
+            .then(() => {
+              engine._pqInFlight -= 1;
+              this._pump(engine);
+            });
         }
       } finally {
         engine._pqPumping = false;

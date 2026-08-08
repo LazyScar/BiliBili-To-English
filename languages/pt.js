@@ -1,5 +1,3 @@
-// Portuguese UI-term dictionary. Values are kept short and button-friendly by translating the
-// curated English labels (en->pt); a long Chinese source never becomes a long Portuguese label.
 const ptDictionary = {
   "我关注的主播": "Seguindo",
   "我的稿件": "Rascunhos",

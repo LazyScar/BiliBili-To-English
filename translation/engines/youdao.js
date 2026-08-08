@@ -1,10 +1,6 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  // Youdao's old keyless GET endpoint is dead (returns the SPA shell) and the current web
-  // translator is AES-encrypted, so there is no stable keyless path. This engine uses Youdao's
-  // official API, which needs an appKey + appSecret from https://ai.youdao.com/ — configured in
-  // the popup like DeepL. sign(v3) = SHA-256(appKey + truncate(q) + salt + curtime + appSecret).
   const API_URL = "https://openapi.youdao.com/api";
 
   function parseJsonSafe(text) {
@@ -16,8 +12,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -49,7 +43,6 @@
       .join("");
   }
 
-  // Youdao's documented sign input: q itself when short, else first10 + length + last10.
   function truncateInput(q) {
     const len = q.length;
     if (len <= 20) return q;
@@ -59,8 +52,6 @@
   class YoudaoEngine {
     constructor() {
       this.name = "youdao";
-      // One q per request is the guaranteed-correct signed path; the throttle chain spaces
-      // requests so a batch of unique lines is issued ~minInterval apart.
       this.maxItemsPerRequest = 12;
       this.maxCharsPerRequest = 1500;
       this.baseIntervalMs = 120;
@@ -71,8 +62,6 @@
       this.lastError = null;
     }
 
-    // 411 = access frequency limited, 412 = request too frequent. AIMD pacing (see RateGovernor)
-    // keeps requests just under the limit instead of oscillating into repeated throttles.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -81,7 +70,6 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
@@ -132,8 +120,6 @@
       const to = this.toYoudaoLang(options?.targetLanguage) || "en";
       const ctx = { appKey, appSecret, from, to };
       const priority = options?.priority;
-      // Each line is a scheduled single-q request; the shared scheduler paces their start times
-      // and lets higher-priority (caption) lines run first.
       const settled = await Promise.allSettled(
         texts.map((text) => this.schedule(() => this.translateSingle(String(text), ctx), priority))
       );
@@ -169,7 +155,6 @@
         if (code === "411" || code === "412" || code === "304") {
           this.noteRateLimited();
         }
-        // Throw so the manager falls back and doesn't negative-cache an auth/rate failure.
         throw new Error(`Youdao error ${code || res.status}`);
       }
       const translation = Array.isArray(data.translation) ? data.translation.join("\n").trim() : "";

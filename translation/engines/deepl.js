@@ -4,8 +4,6 @@
   class DeepLEngine {
     constructor() {
       this.name = "deepl";
-      // DeepL is paced at a fixed interval (no AIMD). baseIntervalMs === minIntervalMs keeps the
-      // shared scheduler's jitter at zero, so its steady 350 ms spacing is never perturbed.
       this.baseIntervalMs = 350;
       this.minIntervalMs = 350;
       this.maxItemsPerRequest = 50;
@@ -14,12 +12,10 @@
       this.lastError = null;
     }
 
-    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
 
-    // Background worker first (the only context with cross-origin privileges in MV3).
     async request(url, init) {
       const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : true;
       if (alive && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
@@ -56,7 +52,6 @@
             };
           }
         } catch (_error) {
-          /* fall through to a direct fetch */
         }
       }
       const response = await fetch(url, init);
@@ -162,8 +157,6 @@
         body.append("source_lang", context.sourceLang);
       }
       try {
-        // MV3 content scripts do NOT inherit cross-origin privileges, so a direct fetch here is
-        // CORS-blocked. Every engine must go through the background worker.
         const response = await this.request(context.endpoint, {
           method: "POST",
           headers: {
@@ -181,13 +174,9 @@
         if (!response.ok) {
           const message = data?.message || `DeepL request failed (${response.status})`;
           this.lastError = message;
-          // Silent once the extension context is gone — otherwise every batch logs after a reload.
           if (!ROOT.isExtensionAlive || ROOT.isExtensionAlive()) {
             console.warn("BTE DeepL error:", message);
           }
-          // Throw so the manager falls back (to Microsoft) and doesn't negative-cache a fetch
-          // failure. Carrying the HTTP status marks it a SOFT error (handled by fallback/backoff)
-          // rather than a hard "internet is down" signal.
           throw Object.assign(new Error(message), { status: response.status || undefined });
         }
         const translations = Array.isArray(data?.translations) ? data.translations : [];
@@ -198,8 +187,6 @@
         });
       } catch (error) {
         this.lastError = String(error && error.message ? error.message : error);
-        // Silent once the extension context is gone, and left to the manager's throttled logging
-        // otherwise, so a persistent failure can't flood the console once per batch.
         if (!ROOT.isExtensionAlive || ROOT.isExtensionAlive()) {
           console.warn("BTE DeepL translate failed:", error);
         }

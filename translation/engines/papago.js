@@ -1,10 +1,6 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  // Naver Papago has no keyless public path, so this engine uses the official Naver Cloud
-  // Platform NMT API. It needs a Client ID + Client secret from console.ncloud.com (AI NAVER
-  // API > Papago Translation), configured in the popup like DeepL. Credentials go in the
-  // X-NCP-APIGW-API-KEY-ID / X-NCP-APIGW-API-KEY headers.
   const API_URL = "https://naveropenapi.apigw.ntruss.com/nmt/v1/translation";
 
   function parseJsonSafe(text) {
@@ -16,8 +12,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -51,8 +45,6 @@
       this.lastError = null;
     }
 
-    // 429 (Too Many Requests) / rate errors. AIMD pacing (see RateGovernor) keeps requests just
-    // under the limit instead of oscillating into repeated throttles.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -61,7 +53,6 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
@@ -108,15 +99,12 @@
         return new Array(texts.length).fill(null);
       }
       this.lastError = null;
-      // Papago's translate endpoint requires an explicit source. Auto-detect isn't offered
-      // here, and BiliBili content is Chinese, so default an unspecified source to zh-CN.
       const rawSource = String(options?.sourceLanguage || "").toLowerCase().trim();
       const source = !rawSource || rawSource === "auto" || rawSource === "auto-detect"
         ? "zh-CN"
         : this.toPapagoLang(rawSource);
       const target = this.toPapagoLang(options?.targetLanguage) || "en";
       if (source === target) {
-        // Papago rejects identical source/target; nothing to do.
         return new Array(texts.length).fill(null);
       }
       const ctx = { clientId, clientSecret, source, target };
@@ -145,7 +133,6 @@
         const code = data?.error?.errorCode || res.status;
         this.lastError = String(code || "unknown");
         if (res.status === 429) this.noteRateLimited();
-        // Throw so the manager falls back and doesn't negative-cache an auth/rate failure.
         throw new Error(`Papago error ${code}`);
       }
       const translated = String(data.message?.result?.translatedText || "").trim();

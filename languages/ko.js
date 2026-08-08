@@ -1,5 +1,3 @@
-// Korean UI-term dictionary. Values are kept short and button-friendly by translating the
-// curated English labels (en->ko); a long Chinese source never becomes a long Korean label.
 const koDictionary = {
   "我关注的主播": "팔로잉",
   "我的稿件": "초안",

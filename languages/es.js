@@ -1,5 +1,3 @@
-// Spanish UI-term dictionary. Values are kept short and button-friendly by translating the
-// curated English labels (en->es); a long Chinese source never becomes a long Spanish label.
 const esDictionary = {
   "我关注的主播": "Siguiendo",
   "我的稿件": "Borradores",

@@ -85,7 +85,6 @@
 
   const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-  // Pre-joined selector strings — avoids rebuilding on every node visit
   const TIME_CONTAINER_SELECTOR = TIME_CONTAINER_SELECTORS.join(",");
   const AREA_COMBINED_SELECTORS = {
     comments: AREA_SELECTORS.comments.join(","),
@@ -94,9 +93,6 @@
     captions: AREA_SELECTORS.captions.join(","),
   };
   const STRICT_ALLOWED_TAGS = new Set(["SPAN", "P", "A", "BUTTON", "LABEL", "H1", "H2", "H3", "LI", "DT", "DD"]);
-  // Inline wrappers Bilibili uses to split one comment/line into many adjacent segments.
-  // We climb through these to find the block container that holds the segments so spacing
-  // can be enforced between them after translation.
   const INLINE_WRAP_TAGS = new Set(["SPAN", "A", "B", "I", "EM", "STRONG", "MARK", "FONT", "SMALL", "SUB", "SUP", "U", "BDI", "LABEL"]);
 
   function isFormControl(el) {
@@ -130,14 +126,11 @@
       this.running = false;
       this.observers = new Set();
       this.observedRoots = new WeakSet();
-      // Far off-screen text is deferred until it nears the viewport.
       this.lazyObserver = null;
       this.lazyObserved = new WeakSet();
       this.pendingNodes = new Set();
       this.flushScheduled = false;
       this.flushInProgress = false;
-      // Dispatch runs off the flush lock so new DOM isn't blocked by an in-flight round-trip.
-      // Each dispatch takes a disjoint job snapshot, so overlap is safe.
       this._activeDispatches = 0;
       this._maxConcurrentDispatches = 4;
       this.dispatchPending = false;
@@ -148,11 +141,8 @@
       this.commentPoll = null;
       this.rescanPoll = null;
       this.stylesInjected = false;
-      // Nodes per DOM pass, scaled by device tier and then tuned by _adaptFlushSize().
       const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
       this.maxNodesPerFlush = cores <= 2 ? 70 : cores <= 4 ? 140 : cores <= 8 ? 200 : 260;
-      // Viewports of off-screen content to pre-translate. Shared by the priority buckets and the
-      // lazy observer margin so they stay in sync.
       this._aheadViewports = cores <= 2 ? 1 : cores <= 4 ? 2 : cores <= 8 ? 3 : 4;
       this._flushDurationSamples = [];
       this.cleanupCounter = 0;
@@ -169,7 +159,6 @@
       this.creatorGateStartedAt = 0;
       this.creatorGateUrl = "";
       this.handleMutations = this.handleMutations.bind(this);
-      // Hover-to-translate (learning aid): translate just the Chinese text under the pointer.
       this.handleHover = this.handleHover.bind(this);
       this.hoverBound = false;
       this.hoverPending = new WeakSet();
@@ -196,12 +185,7 @@
       }
       this.syncHoverBinding();
       this.beginCreatorLayoutGate();
-      // A TreeWalker never crosses shadow boundaries, so a plain body queue would leave shadow
-      // content in the old language. On a language change, rescan every root explicitly.
       if (prevLanguage && prevLanguage !== this.settings.targetLanguage) {
-        // Retranslate straight from each node's SAVED raw original (visible first), then do the
-        // full rescan for shadow DOM / not-yet-seen content. This flips the on-screen text to the
-        // new language almost immediately instead of waiting to re-walk and re-detect the page.
         this.retranslateFromSavedOriginals();
         this.queueFullRescan();
       } else {
@@ -209,8 +193,6 @@
       }
     }
 
-    // Re-translate from each node's saved raw original instead of re-walking the DOM and
-    // re-detecting the old language. Visible text flips first.
     retranslateFromSavedOriginals() {
       if (!this.canRun()) return;
       const language = this.settings.targetLanguage;
@@ -230,7 +212,7 @@
           state.lastMode === mode &&
           this.isStateApplied(node, state, mode)
         ) {
-          return; // already showing this source in the new language
+          return;
         }
         state.inflightSig = "";
         if (language === "en") {
@@ -289,7 +271,6 @@
       this.dispatchTranslations();
     }
 
-    // observeRoot won't re-queue an already-observed root, so queue each explicitly.
     queueFullRescan() {
       this.queueNode(document.body);
       try {
@@ -302,7 +283,6 @@
           if (el.tagName === "MICRO-APP") this.observeMicroApp(el);
         });
       } catch (_error) {
-        /* querySelectorAll can throw on exotic documents — ignore */
       }
       this.observeMicroApps();
       try {
@@ -311,7 +291,6 @@
           (app ? app.querySelector("bili-comments") : null) || document.querySelector("bili-comments");
         if (biliComments) this.queueNode(biliComments.shadowRoot || biliComments);
       } catch (_error) {
-        /* comments component not present — ignore */
       }
     }
 
@@ -428,8 +407,6 @@
 
     setupLazyObserver() {
       if (this.lazyObserver || typeof IntersectionObserver === "undefined") return;
-      // Kept in sync with the priority-bucket "near" threshold so a fired element is always
-      // eligible and never re-deferred.
       const vh = window.innerHeight || 800;
       const aheadPx = Math.round(vh * this._aheadViewports);
       const rootMargin = `${Math.round(vh * 0.5)}px 0px ${aheadPx}px 0px`;
@@ -447,8 +424,6 @@
       );
     }
 
-    // Translated text runs longer than the Chinese it replaces, so a box sized for Chinese can
-    // clip it. Measured per element (never a blanket restyle), batched into one rAF layout read.
     queueOverflowFit(element) {
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (!this._fitQueue) this._fitQueue = new Set();
@@ -469,12 +444,9 @@
     applyOverflowFit(el) {
       if (!el || !el.isConnected) return;
       el.classList.remove("bte-fit-wrap");
-      // Opt-in: auto-restyling translated text made most of the page look worse.
       if (!this.settings?.learn?.fitText) return;
-      // clientWidth 0 means it isn't laid out (hidden menu) — skip; it gets re-checked when shown.
       if (!el.clientWidth) return;
       if (el.scrollWidth <= el.clientWidth + 1) return;
-      // Only relax elements the site itself truncates; visible overflow is left alone.
       let style = null;
       try {
         style = window.getComputedStyle(el);
@@ -489,7 +461,6 @@
       el.classList.add("bte-fit-wrap");
     }
 
-    // Bound only while enabled, so there is no cost when the feature is off.
     syncHoverBinding() {
       const want = !!(this.settings && this.settings.learn && this.settings.learn.hoverTranslate);
       if (want && !this.hoverBound) {
@@ -508,23 +479,18 @@
       if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
       if (this.hoverPending.has(el)) return;
       if (this.shouldSkipElement(el)) return;
-      // Only leaf-ish elements, so we translate the phrase you're on and not a whole container.
       if (el.childElementCount > 0) return;
       const textNode = Array.from(el.childNodes).find(
         (n) => n.nodeType === Node.TEXT_NODE && /[一-鿿]/.test(n.nodeValue || "")
       );
       if (!textNode) return;
       const state = this.ensureTextState(textNode);
-      // Already showing a translation for this text — nothing to do.
       if (state.applied && state.translation) return;
       this.hoverPending.add(el);
       this.processTextNode(textNode, { force: true });
-      // processTextNode defers far off-screen text; a hovered element is by definition visible, so
-      // dispatch immediately for an instant result.
       this.dispatchTranslations();
     }
 
-    // Defer a far off-screen element: translate it only once it nears the viewport.
     observeLazy(element) {
       if (!this.lazyObserver || !element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (this.lazyObserved.has(element)) return;
@@ -680,9 +646,7 @@
       this.titleObserver = new MutationObserver(() => {
         if (!this.canRun()) return;
         const current = document.title;
-        // Our own write — ignore to avoid infinite loop
         if (current === this.titleInjected) return;
-        // Page changed the title (SPA navigation) — re-translate
         this.titleOriginal = current;
         this.titleInjected = "";
         this.translatePageTitle();
@@ -693,7 +657,6 @@
     translatePageTitle() {
       if (!this.canRun()) return;
       if (!this.settings?.areas?.page) return;
-      // Capture original on first call
       if (!this.titleOriginal) {
         const current = document.title;
         if (!current || !current.trim()) return;
@@ -701,7 +664,6 @@
       }
       const source = this.titleOriginal;
       if (!source || !source.trim()) return;
-      // Already applied with current source
       if (document.title === this.titleInjected && this.titleInjected) return;
       this.translationManager
         .translate(source, {
@@ -831,15 +793,11 @@
           this.removeIframeOverlay(iframe);
         }
       } catch (_error) {
-        // Cross-origin iframe cannot be accessed directly from this frame.
-        // We can expose a best-effort translated overlay label, but cannot inspect inner DOM.
         this.applyIframeOverlayFallback(iframe);
       }
     }
 
     ensureIFrameAllowTranslator(_iframe) {
-      // 'translator' Permissions Policy is not supported in Chrome and logs
-      // "Unrecognized feature" warnings. Intentional no-op.
     }
 
     removeIframeOverlay(iframe) {
@@ -923,8 +881,6 @@
         this._flushDurationSamples.shift();
       }
       const avg = this._flushDurationSamples.reduce((a, b) => a + b, 0) / this._flushDurationSamples.length;
-      // Fast PC (flush < 30ms): increase batch for smoother, larger waves; slow PC (flush >
-      // 100ms): reduce batch to protect responsiveness.
       if (avg < 30 && this.maxNodesPerFlush < 400) {
         this.maxNodesPerFlush = Math.min(400, this.maxNodesPerFlush + 30);
       } else if (avg > 100 && this.maxNodesPerFlush > 40) {
@@ -958,8 +914,6 @@
         this.flushInProgress = false;
         this._adaptFlushSize(Date.now() - t0);
       }
-      // Dispatch without holding the flush lock, so new DOM is scanned immediately instead of
-      // waiting on the previous batch's round-trip.
       this.dispatchTranslations();
       if (this.pendingNodes.size) {
         this.scheduleFlush();
@@ -978,7 +932,6 @@
         .catch((error) => console.warn("BTE translation dispatch failed:", error))
         .finally(() => {
           this._activeDispatches -= 1;
-          // Pick up anything that queued while dispatches were saturated / in flight.
           if ((this.dispatchPending || this.textJobs.length || this.attrJobs.length) && this.canRun()) {
             this.dispatchPending = false;
             this.dispatchTranslations();
@@ -1138,11 +1091,7 @@
       if (this.isTimeLikeText(normalized)) return true;
       if (/^https?:\/\/\S+$/.test(normalized)) return true;
       if (/^[\p{P}\p{S}\s]+$/u.test(normalized)) return true;
-      // No Chinese at all: the source is declared as Chinese, so sending Latin text would have it
-      // "translated" from a language it isn't, producing nonsense. It is also a large share of the
-      // page (usernames, counts, latin titles), so skipping it removes many pointless requests.
       if (!/[㐀-鿿぀-ヿ가-힯]/.test(normalized)) return true;
-      // BV / AV ids are identifiers, never prose.
       if (/^(BV[1-9A-Za-z]{10}|av\d+)$/i.test(normalized)) return true;
       if (parent && this.isTimeContainer(parent)) return true;
       if (this.isStrictCreatorMode()) {
@@ -1185,12 +1134,9 @@
       }
       if (mode === "off") {
         this.removeBilingualNode(state);
-        // Preserve (or inject) surrounding whitespace so adjacent inline elements
-        // — links, @-mentions, buttons inside comment text — stay word-separated.
         const origVal = state.original || "";
         let leadWs = origVal.match(/^(\s+)/)?.[1] ?? "";
         let trailWs = origVal.match(/(\s+)$/)?.[1] ?? "";
-        // When the original CJK had no spaces (common), add one at element boundaries.
         if (!leadWs && node.previousSibling?.nodeType === Node.ELEMENT_NODE) leadWs = " ";
         if (!trailWs && node.nextSibling?.nodeType === Node.ELEMENT_NODE) trailWs = " ";
         const withWs = leadWs + translated + trailWs;
@@ -1256,8 +1202,6 @@
       if (!node.isConnected) return;
       if (this.shouldSkipElement(node.parentElement)) return;
       const area = this.detectArea(node.parentElement);
-      // `force` (hover-to-translate) bypasses the per-area toggles — that is the point of the
-      // mode. Captions stay excluded either way; CaptionManager owns those.
       const force = !!(options && options.force);
       if ((!force && !this.isAreaEnabled(area)) || area === "captions") return;
       const mode = modeFromSettings(this.settings, area);
@@ -1275,7 +1219,6 @@
         state.applied = false;
       }
       if (state.injectedValue && liveValue === state.injectedValue && state.original) {
-        // Keep source text.
       } else {
         state.original = liveValue;
       }
@@ -1292,7 +1235,6 @@
         return;
       }
 
-      // Chinese relative timestamps are converted locally (instant, no engine request).
       if (language === "en") {
         const relative = this.localizeRelativeTime(source);
         if (relative) {
@@ -1332,7 +1274,6 @@
         return;
       }
 
-      // Far off-screen and uncached: defer the request until it nears the viewport.
       const priority = this.getPriorityBucket(node.parentElement);
       if (priority <= 0 && this.lazyObserver) {
         this.observeLazy(node.parentElement);
@@ -1376,10 +1317,6 @@
       if (!this.canRun()) return;
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (!element.isConnected) return;
-      // shouldSkipElement is checked first: owned/SKIP_TAG/contenteditable elements
-      // exit before paying for detectArea's CSS closest() calls.
-      // It also guards area === "captions" internally, so isAreaEnabled only needs
-      // to check whether the surviving area is enabled.
       if (this.shouldSkipElement(element)) return;
       const area = this.detectArea(element);
       if (!this.isAreaEnabled(area)) return;
@@ -1462,8 +1399,6 @@
       return /(tag|tags|topic|category|chip|label|keyword|badge)/i.test(attr);
     }
 
-    // Chinese relative timestamps are converted locally: instant, and avoids one request per
-    // timestamp. English targets only.
     localizeRelativeTime(text) {
       const s = String(text || "").trim();
       if (!s || s.length > 12) return null;
@@ -1494,7 +1429,6 @@
           Number(full[4] || 0), Number(full[5] || 0), Number(full[6] || 0)
         );
       } else {
-        // MM-DD with no year → assume current year (e.g. "04-05")
         const short = s.match(/^(\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
         if (!short) return null;
         date = new Date(
@@ -1509,8 +1443,6 @@
       const diffMinutes = Math.floor(diffMs / 60000);
       const diffHours = Math.floor(diffMs / 3600000);
       const diffDays = Math.floor(diffMs / 86400000);
-      // Older than ~a month: don't leave the raw "2026-03-27 04:59" on screen — show a
-      // clean English date. Keep the year only when the source actually had one.
       if (diffDays >= 30) {
         const label = `${MONTH_ABBR[date.getMonth()]} ${date.getDate()}`;
         return full ? `${label}, ${date.getFullYear()}` : label;
@@ -1532,9 +1464,6 @@
         this.timestampState.set(element, { original: text, applied: "" });
       }
       const state = this.timestampState.get(element);
-      // If the element shows our previously applied label (e.g. "21 hours ago"),
-      // compute relative time from the saved original date string, not the applied
-      // text — otherwise formatRelativeTime returns null and we never update it.
       const sourceText = (state.applied && text === state.applied) ? state.original : text;
       if (sourceText !== state.applied) {
         state.original = sourceText;
@@ -1548,14 +1477,11 @@
 
     scanShadowRootTimestamps(root, depth) {
       if (!root || (depth || 0) > 5) return;
-      // Selector-based scan (catches known class names)
       try {
         root.querySelectorAll(TIME_CONTAINER_SELECTOR).forEach((el) => {
           this.processTimestampElement(el);
         });
       } catch (_error) {}
-      // Text-based fallback: walk all text nodes, process leaf parents whose content
-      // looks like a date/time. This handles unknown class names in shadow DOM.
       try {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         let textNode;
@@ -1569,7 +1495,6 @@
           }
         }
       } catch (_error) {}
-      // Recurse into nested shadow roots (e.g. bili-comment-renderer)
       try {
         root.querySelectorAll("*").forEach((el) => {
           if (el.shadowRoot) this.scanShadowRootTimestamps(el.shadowRoot, (depth || 0) + 1);
@@ -1579,27 +1504,19 @@
 
     scanTimestamps() {
       if (!this.canRun()) return;
-      // Re-process elements we've already applied to (handles "21h ago" → "22h ago" updates).
-      // Cheap — only iterates the elements we already track — so it runs every tick.
       try {
         this.timestampState.forEach((_state, el) => {
           if (el && el.isConnected) this.processTimestampElement(el);
         });
       } catch (_error) {}
-      // Discovery of NEW timestamp elements walks the whole document (+ shadow DOM) for
-      // text nodes, which is expensive. The comment poll calls this every 250 ms, so
-      // throttle the full scan to ~1 s; the cheap refresh above keeps applied labels live.
       const now = Date.now();
       if (now - this.lastTimestampDiscovery < 1000) return;
       this.lastTimestampDiscovery = now;
-      // Regular document: selector-based scan
       try {
         document.querySelectorAll(TIME_CONTAINER_SELECTOR).forEach((el) => {
           this.processTimestampElement(el);
         });
       } catch (_error) {}
-      // Text-based fallback: catch date strings (e.g. "04-10", "03-31 15:21",
-      // "2026-04-21 01:30:00") that appear in elements not in our selector list.
       try {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         let textNode;
@@ -1612,8 +1529,6 @@
           this.processTimestampElement(parent);
         }
       } catch (_error) {}
-      // bili-comments shadow DOM: full scan including text-based fallback.
-      // Try multiple locations since Bilibili occasionally moves the component.
       try {
         const biliComments =
           document.getElementById("commentapp")?.querySelector("bili-comments") ||
@@ -1634,8 +1549,6 @@
       if (vh <= 0 || vw <= 0) return 0;
       const isVisible = rect.bottom >= 0 && rect.top <= vh && rect.right >= 0 && rect.left <= vw;
       if (isVisible) return 2;
-      // "Near" = within N viewports of the fold (N scales with device speed). Content beyond
-      // this is priority 0 → deferred and translated lazily as it approaches (see observeLazy).
       const aheadPx = vh * (this._aheadViewports || 1);
       const near = rect.bottom >= -vh && rect.top <= vh + aheadPx;
       return near ? 1 : 0;
@@ -1668,14 +1581,8 @@
         grouped.get(key).jobs.push(job);
       });
       return Array.from(grouped.values()).sort((a, b) => {
-        // Visibility first: whatever the viewer can actually see — the page structure/chrome on
-        // load, then any on-screen content — translates before off-screen "near" content, no
-        // matter which area it's in. This is what makes the visible page finish first instead of
-        // waiting behind below-the-fold comments. Off-screen-far text isn't here at all (it's
-        // deferred by the lazy observer until it approaches).
         const priorityCmp = (b.priority || 0) - (a.priority || 0);
         if (priorityCmp !== 0) return priorityCmp;
-        // Within the same visibility bucket, keep the area ordering as a stable tiebreak.
         const ia = AREA_PRIORITY.indexOf(a.area);
         const ib = AREA_PRIORITY.indexOf(b.area);
         return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
@@ -1693,7 +1600,6 @@
       if (!uniqueTexts.length) return new Map();
       const translated = await this.translationManager.translateMany(uniqueTexts, {
         ...options,
-        // Viewport bucket feeds the engine's paced scheduler; still below caption priority.
         priority: group.priority || 0,
         onPartial,
       });
@@ -1827,8 +1733,6 @@
       }
       this.flushSiblingSpacing();
       } finally {
-        // If canRun() flipped false mid-flush, clear any still-set inflight markers so those
-        // nodes re-queue instead of being skipped forever.
         textJobs.forEach((job) => {
           const state = this.textState.get(job.node);
           if (state && state.requestId === job.requestId && state.inflightSig) {
@@ -1848,9 +1752,6 @@
       return /[A-Za-z0-9+#]/.test(char || "");
     }
 
-    // Bilibili renders @-mentions (and topic #tags) as separate clickable elements with
-    // no surrounding whitespace, so after translation they sit flush against the text.
-    // Detect them so we can insert a separating space for readability.
     isMentionNode(node) {
       if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
       const text = (node.textContent || "").trim();
@@ -1891,8 +1792,6 @@
       const head = this.getHeadChar(rightNode);
       if (!tail || !head) return false;
       if (/\s/.test(tail) || /\s/.test(head)) return false;
-      // Always separate an @-mention / #-topic chip from its neighbour (it's a distinct
-      // clickable node), except when the neighbouring char is punctuation that should hug.
       if (this.isMentionNode(leftNode) || this.isMentionNode(rightNode)) {
         if (/[)\]}>,.!?;:\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a]/.test(head)) return false;
         if (/[([{<\uff08]/.test(tail)) return false;
@@ -1903,13 +1802,6 @@
       return true;
     }
 
-    // Record containers whose direct children may need a separating space after
-    // translation. We add the text node's parent, then climb through inline wrappers
-    // (span/a/b/…) to also reach the block container that holds sibling segments —
-    // Bilibili splits one comment into many adjacent inline elements, and without this
-    // their translated text runs together (e.g. "…Live Classes]Many students" or
-    // "What I heard beforeOld HeI attended…"). We stop at the first block-level element
-    // so we never space unrelated layout siblings.
     recordSpacingParent(node) {
       let el = node && node.parentElement;
       let depth = 0;
@@ -1960,7 +1852,6 @@
           this.enforceSiblingSpacing(parent);
         });
       } catch (_error) {
-        // ignore selector issues
       }
       this.spacingParents.clear();
     }
@@ -1985,11 +1876,6 @@
           display: inline;
           font-size: 0.95em;
         }
-        /* ---- overflow fit (opt-in) --------------------------------------------------------
-           Translated text runs wider than the Chinese it replaces, so a box sized for Chinese can
-           clip it. An earlier version also shrank the font, which looked worse in most places, so
-           this now ONLY relaxes the truncation on elements that are genuinely clipped — no font
-           size, spacing or line-height changes anywhere. Off unless the user turns it on. */
         .bte-fit-wrap {
           white-space: normal !important;
           overflow-wrap: anywhere !important;

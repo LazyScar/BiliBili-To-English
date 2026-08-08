@@ -1,12 +1,9 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  // The web page is captcha-walled for datacenter/unknown IPs, so the old sid scrape could never
-  // succeed. The Android endpoint needs no scraping: a client-generated UUID as "ucid" plus
-  // srv=android. Do not go back to the web path.
   const TRANSLATE_URL = "https://translate.yandex.net/api/v1/tr.json/translate";
-  const UCID_TTL_MS = 6 * 60 * 1000; // rotate the client id periodically, like the app does
-  const FAIL_COOLDOWN_MS = 60 * 1000; // after a hard failure, fall back instantly for a while
+  const UCID_TTL_MS = 6 * 60 * 1000;
+  const FAIL_COOLDOWN_MS = 60 * 1000;
 
   function parseJsonSafe(text) {
     try {
@@ -17,8 +14,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -56,8 +51,6 @@
       this.lastError = null;
     }
 
-    // Client id for the Android endpoint: a plain UUID we generate ourselves (no network, no
-    // scraping, nothing to be captcha-blocked). Rotated periodically like the app does.
     getUcid() {
       if (this.ucid && Date.now() - this.ucidCreatedAt < UCID_TTL_MS) return this.ucid;
       const rand = () => Math.floor(Math.random() * 16).toString(16);
@@ -72,8 +65,6 @@
       return this.ucid;
     }
 
-    // The web endpoint rate-limits (HTTP 429). AIMD pacing (see RateGovernor): back off fast,
-    // recover gradually so we settle just under the limit instead of re-tripping it.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -82,13 +73,10 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Serialize + throttle requests (shared paced, priority-aware scheduler — see
-    // RateGovernor.schedule) so the shared sid isn't spent faster than Yandex allows.
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
 
-    // Background service worker first (bypasses CORS in iframes/workers), then a direct fetch.
     async request(url, init) {
       const payload = {
         type: "bte:bgFetch",
@@ -162,14 +150,11 @@
       if (!Array.isArray(texts) || texts.length === 0) {
         return [];
       }
-      // Fast-fail during a cooldown after a hard failure: skip the throttle queue entirely so the
-      // manager falls back to another engine with no added latency.
       if (Date.now() < this.cooldownUntil) {
         throw Object.assign(new Error("Yandex unavailable (cooldown)"), { reason: this.lastError || "cooldown" });
       }
       const target = this.toYandexLang(options?.targetLanguage) || "en";
       const source = this.toYandexLang(options?.sourceLanguage);
-      // Yandex accepts "<from>-<to>" or just "<to>" (auto-detect the source).
       const lang = source && source !== target ? `${source}-${target}` : target;
       const priority = options?.priority;
       const groups = this.buildGroups(texts);
@@ -184,7 +169,6 @@
     async translateGroup(texts, lang, retriedUcid) {
       this.reqCounter += 1;
       const query = new URLSearchParams();
-      // Android-app style request: a self-generated client id, no scraped session token.
       query.set("ucid", this.getUcid());
       query.set("srv", "android");
       query.set("lang", lang);
@@ -204,8 +188,6 @@
       const data = parseJsonSafe(res.text);
       const code = data && Number.isFinite(Number(data.code)) ? Number(data.code) : null;
 
-      // A rejected/stale client id surfaces as HTTP 403 or a non-200 body code. Rotate the ucid
-      // once and retry before giving up, so one bad id doesn't blank a whole batch.
       const ucidRejected = res.status === 403 || code === 401 || code === 403 || code === 404;
       if (ucidRejected && !retriedUcid) {
         this.ucid = "";
@@ -218,8 +200,6 @@
       }
 
       if (!res.ok || (code !== null && code !== 200)) {
-        // Back off briefly so a broken endpoint doesn't get hammered once per batch, and record a
-        // reason the popup can show instead of silently switching engines.
         this.lastError = res.status === 429 ? "rate-limited" : "unavailable";
         this.cooldownUntil = Date.now() + FAIL_COOLDOWN_MS;
         throw Object.assign(

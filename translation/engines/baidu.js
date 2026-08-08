@@ -1,14 +1,8 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  // There is no keyless path (window.gtk is gone, v2transapi returns errno 995). This uses the
-  // official General Translation
-  // API, which needs an appid + secret from https://fanyi-api.baidu.com/ — configured in the
-  // popup like DeepL. sign = MD5(appid + q + salt + secret).
   const API_URL = "https://fanyi-api.baidu.com/api/trans/vip/translate";
 
-  // Self-contained RFC 1321 MD5 (returns lowercase hex, UTF-8 safe). Baidu's sign is MD5 and
-  // SubtleCrypto has no MD5, so it is bundled here. Verified against known vectors.
   function md5(input) {
     function rl(n, c) { return (n << c) | (n >>> (32 - c)); }
     function au(x, y) {
@@ -22,7 +16,6 @@
     function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
     function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | ~d), a, b, x, s, t); }
     function toBytes(str) {
-      // UTF-8 encode into a byte-per-char string so multibyte CJK hashes correctly.
       const utf8 = unescape(encodeURIComponent(str));
       const out = [];
       for (let i = 0; i < utf8.length; i += 1) out.push(utf8.charCodeAt(i) & 0xff);
@@ -95,8 +88,6 @@
   }
 
   function runtimeMessage(payload) {
-    // chrome.runtime.id is undefined once the extension is reloaded ("context invalidated").
-    // Bail cleanly rather than letting sendMessage throw an uncaught error onto chrome://extensions.
     const alive = ROOT.isExtensionAlive ? ROOT.isExtensionAlive() : !!(chrome && chrome.runtime && chrome.runtime.id);
     if (!alive || !chrome.runtime.sendMessage) {
       return Promise.reject(new Error("runtime unavailable"));
@@ -120,8 +111,6 @@
   class BaiduEngine {
     constructor() {
       this.name = "baidu";
-      // Newline-joined batch: many subtitle lines per request keeps throughput up despite the
-      // free tier's ~1 QPS cap. Baidu allows up to 6000 bytes per q.
       this.maxItemsPerRequest = 20;
       this.maxCharsPerRequest = 1800;
       this.baseIntervalMs = 300;
@@ -132,8 +121,6 @@
       this.lastError = null;
     }
 
-    // Error 54003 = access frequency limited. AIMD pacing (see RateGovernor) keeps the appid
-    // just under its QPS limit instead of oscillating into repeated throttles.
     noteRateLimited() {
       (ROOT.RateGovernor || {}).rateLimited?.(this);
     }
@@ -142,7 +129,6 @@
       (ROOT.RateGovernor || {}).success?.(this);
     }
 
-    // Shared paced, priority-aware scheduler (see RateGovernor.schedule).
     schedule(task, priority) {
       return ROOT.RateGovernor.schedule(this, task, priority);
     }
@@ -185,7 +171,7 @@
       let current = [];
       let charCount = 0;
       texts.forEach((text) => {
-        const addition = text.length + 1; // + newline joiner
+        const addition = text.length + 1;
         if (current.length > 0 && (current.length >= this.maxItemsPerRequest || charCount + addition > this.maxCharsPerRequest)) {
           groups.push(current);
           current = [];
@@ -220,8 +206,6 @@
     }
 
     async translateGroup(texts, ctx) {
-      // Collapse internal newlines so each item is exactly one line — Baidu returns one
-      // trans_result entry per newline-delimited query, so this keeps index alignment.
       const items = texts.map((t) => String(t).replace(/[\r\n]+/g, " ").trim());
       const q = items.join("\n");
       const salt = String(Date.now());
@@ -244,8 +228,6 @@
       if (data && data.error_code) {
         const code = String(data.error_code);
         this.lastError = `${code}:${data.error_msg || ""}`;
-        // 54003 = QPS limited, 54005 = long-query too frequent → back off and throw so the
-        // manager retries via fallback instead of negative-caching.
         if (code === "54003" || code === "54005" || code === "54004") {
           this.noteRateLimited();
         }
@@ -256,7 +238,6 @@
         throw new Error("Baidu returned no trans_result");
       }
       this.noteSuccess();
-      // Prefer index alignment (results are in query order); fall back to src→dst mapping.
       if (results.length === items.length) {
         return items.map((input, i) => {
           const dst = typeof results[i]?.dst === "string" ? results[i].dst.trim() : "";
@@ -277,5 +258,5 @@
   }
 
   ROOT.BaiduEngine = BaiduEngine;
-  ROOT._md5 = md5; // exposed for the in-browser self-test only
+  ROOT._md5 = md5;
 })();
