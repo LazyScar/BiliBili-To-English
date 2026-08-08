@@ -31,7 +31,7 @@
 浏览器扩展，实时翻译 B 站的界面、评论、标题和字幕。支持 **Chrome、Firefox、Brave、Opera、Edge** 等。装好、选个语言，浏览时自动显示翻译。
 
 <p align="center">
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
+  <a href="https://addons.mozilla.org/firefox/addon/bilibili-to-english/">
     <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
   </a>
   <a href="https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab">
@@ -42,7 +42,7 @@
 ## 安装
 
 ### 浏览器商店
-- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/)
+- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/firefox/addon/bilibili-to-english/)
 - **Chrome** – [Chrome 网上应用店](https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab)
 
 ### 手动安装
