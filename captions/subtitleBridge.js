@@ -9,6 +9,7 @@
 
   const postedUrls = new Set();
   let lastHref = location.href;
+  let lastFetched = "";
 
   function normalizeUrl(url) {
     let u = String(url || "").trim();
@@ -44,16 +45,47 @@
     post("subtitleUrl", { url });
   }
 
+  // The player downloads a subtitle file when that track is switched on.
+  function emitFetched(rawUrl) {
+    const url = normalizeUrl(rawUrl);
+    if (!url || !isSubtitleUrl(url)) return;
+    emitUrl(url);
+    if (url === lastFetched) return;
+    lastFetched = url;
+    post("subtitleFetched", { url, activeLan: activeSubtitleLan() });
+  }
+
+  const MAX_BODY_CHARS = 3 * 1024 * 1024;
+  function emitBody(rawUrl, text) {
+    const url = normalizeUrl(rawUrl);
+    if (!url || !isSubtitleUrl(url) || typeof text !== "string" || !text || text.length > MAX_BODY_CHARS) return;
+    post("subtitleBody", { url, text });
+  }
+
   try {
     const originalFetch = window.fetch;
     if (typeof originalFetch === "function" && !originalFetch.__bteHooked) {
       const hooked = function (input, init) {
+        let url = "";
         try {
-          const url = typeof input === "string" ? input : input && input.url;
-          emitUrl(url);
+          // fetch() accepts a string, a Request (.url) or a URL object (.href).
+          url = typeof input === "string" ? input : input && (input.url || input.href);
+          emitFetched(url);
         } catch (_error) {
         }
-        return originalFetch.apply(this, arguments);
+        const result = originalFetch.apply(this, arguments);
+        try {
+          if (url && isSubtitleUrl(normalizeUrl(url)) && result && typeof result.then === "function") {
+            result.then((response) => {
+              try {
+                if (response && response.ok) response.clone().text().then((text) => emitBody(url, text), () => {});
+              } catch (_error) {
+              }
+            }, () => {});
+          }
+        } catch (_error) {
+        }
+        return result;
       };
       hooked.__bteHooked = true;
       window.fetch = hooked;
@@ -66,7 +98,19 @@
     if (typeof originalOpen === "function" && !originalOpen.__bteHooked) {
       const hookedOpen = function (method, url) {
         try {
-          emitUrl(url);
+          emitFetched(url);
+          if (isSubtitleUrl(normalizeUrl(url))) {
+            const xhr = this;
+            xhr.addEventListener("load", () => {
+              try {
+                if (xhr.status < 200 || xhr.status >= 300) return;
+                const type = xhr.responseType;
+                if (type === "" || type === "text") emitBody(url, xhr.responseText);
+                else if (type === "json" && xhr.response) emitBody(url, JSON.stringify(xhr.response));
+              } catch (_error) {
+              }
+            });
+          }
         } catch (_error) {
         }
         return originalOpen.apply(this, arguments);
@@ -180,6 +224,7 @@
     if (location.href !== lastHref) {
       lastHref = location.href;
       postedUrls.clear();
+      lastFetched = "";
       ticks = 0;
     }
     if (ticks < 30 || ticks % 8 === 0) {

@@ -112,7 +112,7 @@
       const settled = await Promise.allSettled(
         texts.map((text) => this.schedule(() => this.translateSingle(String(text), ctx), priority))
       );
-      return settled.map((result) => (result.status === "fulfilled" ? result.value : null));
+      return ROOT.fromSettledResults(settled);
     }
 
     async translateSingle(text, ctx) {

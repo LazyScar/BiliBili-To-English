@@ -8,6 +8,8 @@
   const MAX_LEN = 12;
   const MAX_CACHE = 500;
   const MAX_QUEUE = 40;
+  const STORE_KEY = "bteNamesV1";
+  const STORE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
   const SENTENCE_MARKERS = /[的了是在有和与也就都很吗呢吧啊把被从对为把着过还没不我你他她它们这那什么怎么可以因为但是所以如果虽然而且或者已经正在应该需要能够觉得知道看到听到觉]/;
   const DISQUALIFYING = /[0-9A-Za-z\s，。！？、；：""''（）《》…—·~!@#$%^&*()_+=\[\]{}|\\/<>?,.;:'"`-]/;
@@ -28,6 +30,60 @@
     setEnabled(on) {
       this.enabled = !!on;
       if (!on) this.queue.length = 0;
+      else this.loadSaved();
+    }
+
+    // Names already looked up (found or not) are kept for a month, per target language.
+    storage() {
+      try {
+        return typeof chrome !== "undefined" && chrome.storage && chrome.storage.local ? chrome.storage.local : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    loadSaved() {
+      const area = this.storage();
+      if (!area || this.loadedFor === this.targetLanguage) return;
+      const lang = this.targetLanguage;
+      this.loadedFor = lang;
+      try {
+        area.get(STORE_KEY, (data) => {
+          const saved = data && data[STORE_KEY] && data[STORE_KEY][lang];
+          if (!saved || this.targetLanguage !== lang) return;
+          const now = Date.now();
+          Object.entries(saved).forEach(([phrase, [label, at]]) => {
+            if (now - at >= STORE_TTL_MS || this.resolved.has(phrase)) return;
+            this.resolved.set(phrase, label);
+            if (label && typeof this.onResolved === "function") {
+              try { this.onResolved(phrase, label); } catch (_error) { }
+            }
+          });
+        });
+      } catch (_error) {
+      }
+    }
+
+    saveSoon() {
+      if (this.saveTimer) return;
+      this.saveTimer = setTimeout(() => {
+        this.saveTimer = null;
+        const area = this.storage();
+        if (!area) return;
+        const lang = this.targetLanguage;
+        try {
+          area.get(STORE_KEY, (data) => {
+            const all = (data && data[STORE_KEY]) || {};
+            const mine = all[lang] || {};
+            const now = Date.now();
+            this.resolved.forEach((label, phrase) => { if (!mine[phrase]) mine[phrase] = [label, now]; });
+            const entries = Object.entries(mine).filter(([, v]) => now - v[1] < STORE_TTL_MS).slice(-2000);
+            all[lang] = Object.fromEntries(entries);
+            area.set({ [STORE_KEY]: all });
+          });
+        } catch (_error) {
+        }
+      }, 3000);
     }
 
     setTargetLanguage(lang) {
@@ -36,6 +92,7 @@
       this.targetLanguage = next;
       this.resolved.clear();
       this.queue.length = 0;
+      if (this.enabled) this.loadSaved();
     }
 
     looksLikeName(text) {
@@ -96,6 +153,7 @@
             label = null;
           }
           this.remember(phrase, label);
+          this.saveSoon();
           if (label && typeof this.onResolved === "function") {
             try { this.onResolved(phrase, label); } catch (_error) { }
           }

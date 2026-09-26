@@ -71,7 +71,8 @@ Create `translation/engines/<name>.js` exporting a class on `window.BTE`:
 - Pace requests with `ROOT.RateGovernor.schedule(this, task, priority)` so captions keep priority
 - Guard messaging with `ROOT.isExtensionAlive()`
 - Set `this.lastError` (`"missing-key"`, `"missing-credentials"`, …) so the popup can explain itself
-- Throw on failure so the manager falls back instead of caching an empty result
+- Throw on failure so the manager falls back (a `null` result means "nothing to translate" and is cached)
+- Send batches through `ROOT.runEngineGroups` so one failed batch doesn't lose the others
 
 Then register it in `TranslationManager`'s `engines` map, `resolveEngineChain`, the popup's engine
 list and icons, and `manifest.json`.

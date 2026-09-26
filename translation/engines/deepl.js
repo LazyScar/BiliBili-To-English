@@ -127,14 +127,14 @@
       const endpointMode = options?.endpointMode || "auto";
       const endpoint = this.resolveEndpoint(endpointMode, key);
       const targetLang = this.toDeepLLang(options?.targetLanguage || "en");
+      // DeepL source languages never carry a region ("ZH", not "ZH-CN"), unlike some targets.
       const sourceLang = options?.sourceLanguage && options.sourceLanguage !== "auto"
-        ? this.toDeepLLang(options.sourceLanguage)
+        ? String(options.sourceLanguage).split(/[-_]/)[0].toUpperCase()
         : null;
       const priority = options?.priority;
       const groups = this.buildGroups(texts);
-      const output = [];
-      for (const group of groups) {
-        const translated = await this.schedule(
+      return ROOT.runEngineGroups(groups, (group) =>
+        this.schedule(
           () =>
             this.translateGroup(group, {
               endpoint,
@@ -143,10 +143,8 @@
               sourceLang,
             }),
           priority
-        );
-        output.push(...translated);
-      }
-      return output;
+        )
+      );
     }
 
     async translateGroup(texts, context) {
@@ -179,7 +177,10 @@
           }
           throw Object.assign(new Error(message), { status: response.status || undefined });
         }
-        const translations = Array.isArray(data?.translations) ? data.translations : [];
+        if (!Array.isArray(data?.translations)) {
+          throw Object.assign(new Error("DeepL returned no translations"), { status: 502 });
+        }
+        const translations = data.translations;
         return texts.map((input, index) => {
           const output = translations[index]?.text;
           const trimmed = typeof output === "string" ? output.trim() : "";

@@ -1,4 +1,4 @@
-const ptDictionary = {
+var ptDictionary = {
   "我关注的主播": "Seguindo",
   "我的稿件": "Rascunhos",
   "预约": "Reserva",

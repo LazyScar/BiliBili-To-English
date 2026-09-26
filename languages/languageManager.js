@@ -1,4 +1,4 @@
-class LanguageManager {
+var LanguageManager = class LanguageManager {
     constructor() {
         this.currentLanguage = 'en';
         this.availableLanguages = {
@@ -74,17 +74,25 @@ class LanguageManager {
         return true;
     }
 
+    lookup(key) {
+        if (!key || !Object.prototype.hasOwnProperty.call(this.dictionary, key)) return null;
+        const value = this.dictionary[key];
+        return typeof value === 'string' && value ? value : null;
+    }
+
     getTranslation(text) {
-        if (!text) return null;
-        const exact = this.dictionary[text];
+        if (!text || typeof text !== 'string') return null;
+        const exact = this.lookup(text);
         if (exact) return exact;
         const lower = text.toLowerCase();
-        if (this.dictionary[lower]) return this.dictionary[lower];
+        const lowerHit = this.lookup(lower);
+        if (lowerHit) return lowerHit;
         const normalized = lower.replace(/\s+/g, ' ').trim();
-        if (this.dictionary[normalized]) return this.dictionary[normalized];
+        const normalizedHit = this.lookup(normalized);
+        if (normalizedHit) return normalizedHit;
         const stripped = text.replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, '');
         if (stripped && stripped !== text) {
-            return this.dictionary[stripped] || this.dictionary[stripped.toLowerCase()] || null;
+            return this.lookup(stripped) || this.lookup(stripped.toLowerCase()) || null;
         }
         return null;
     }
@@ -104,5 +112,5 @@ class LanguageManager {
     }
 }
 
-const languageManager = new LanguageManager();
+var languageManager = new LanguageManager();
 window.languageManager = languageManager;

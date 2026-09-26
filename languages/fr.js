@@ -1,4 +1,4 @@
-const frDictionary = {
+var frDictionary = {
   "我关注的主播": "Suivis",
   "我的稿件": "Brouillons",
   "预约": "Réserver",

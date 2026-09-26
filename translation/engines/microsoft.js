@@ -6,6 +6,31 @@
   const API_VERSION = "3.0";
   const BING_HOME = "https://www.bing.com/translator";
   const BING_TOKEN_TTL_MS = 8 * 60 * 1000;
+  // Tokens are shared between tabs for their lifetime.
+  const SHARED_TOKENS_KEY = "bteMicrosoftTokensV1";
+
+  function readSharedTokens() {
+    const area = globalThis.chrome && chrome.storage && chrome.storage.local;
+    if (!area) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      try {
+        area.get([SHARED_TOKENS_KEY], (data) => resolve((data && data[SHARED_TOKENS_KEY]) || null));
+      } catch (_error) {
+        resolve(null);
+      }
+    });
+  }
+
+  function writeSharedTokens(patch) {
+    const area = globalThis.chrome && chrome.storage && chrome.storage.local;
+    if (!area) return;
+    readSharedTokens().then((current) => {
+      try {
+        area.set({ [SHARED_TOKENS_KEY]: { ...(current || {}), ...patch } }, () => void chrome.runtime.lastError);
+      } catch (_error) {
+      }
+    });
+  }
 
   function parseJsonSafe(text) {
     try {
@@ -85,6 +110,14 @@
       }
       if (this.bingPromise) return this.bingPromise;
       this.bingPromise = (async () => {
+        if (!force) {
+          const shared = await readSharedTokens();
+          const bing = shared && shared.bing;
+          if (bing && bing.ig && bing.token && Date.now() - (bing.at || 0) < BING_TOKEN_TTL_MS) {
+            this.bing = { ...bing, count: 0 };
+            return this.bing;
+          }
+        }
         const res = await this.request(BING_HOME, { method: "GET", credentials: "omit" });
         const html = String(res.text || "");
         const ig = (html.match(/IG:"([A-Za-z0-9]+)"/) || [])[1] || "";
@@ -94,6 +127,7 @@
           throw Object.assign(new Error("Bing translator tokens unavailable"), { status: res.status || 0 });
         }
         this.bing = { ig, iid, key: abuse[1], token: abuse[2], host: "https://www.bing.com/", at: Date.now(), count: 0 };
+        writeSharedTokens({ bing: { ig, iid, key: abuse[1], token: abuse[2], host: this.bing.host, at: this.bing.at } });
         return this.bing;
       })().finally(() => {
         this.bingPromise = null;
@@ -107,15 +141,22 @@
       const from = !rawSource || rawSource === "auto" || rawSource === "auto-detect"
         ? "zh-Hans"
         : (rawSource.toLowerCase().startsWith("zh") ? "zh-Hans" : rawSource);
-      const tokens = await this.ensureBingTokens(false);
+      await this.ensureBingTokens(false);
 
-      const post = async (body, retried) => {
+      // Built per attempt, so a retry after 205 (expired) uses the new token.
+      const buildBody = (value) =>
+        `&fromLang=${encodeURIComponent(from)}&to=${encodeURIComponent(target)}` +
+        `&text=${encodeURIComponent(value)}` +
+        `&token=${encodeURIComponent(this.bing.token)}&key=${encodeURIComponent(this.bing.key)}`;
+
+      const post = async (value, retried) => {
         this.bing.count += 1;
+        const tokens = this.bing;
         const url = `${tokens.host}ttranslatev3?isVertical=1&IG=${tokens.ig}&IID=${tokens.iid}.${this.bing.count}`;
         const res = await this.request(url, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body,
+          body: buildBody(value),
           credentials: "omit",
         });
         if (res.status === 429 || res.status === 401) {
@@ -126,15 +167,15 @@
         const statusCode = payload?.StatusCode || payload?.statusCode || 200;
         if (statusCode === 205 && !retried) {
           await this.ensureBingTokens(true);
-          return post(body, true);
+          return post(value, true);
+        }
+        if (!Array.isArray(payload)) {
+          throw Object.assign(new Error(`Bing returned no translation (${res.status || "no response"})`), {
+            status: res.status >= 400 ? res.status : 502,
+          });
         }
         return payload?.[0]?.translations?.[0]?.text;
       };
-
-      const buildBody = (value) =>
-        `&fromLang=${encodeURIComponent(from)}&to=${encodeURIComponent(target)}` +
-        `&text=${encodeURIComponent(value)}` +
-        `&token=${encodeURIComponent(tokens.token)}&key=${encodeURIComponent(tokens.key)}`;
 
       const flat = texts.map((t) => String(t || "").replace(/\s*\n+\s*/g, " "));
       if (!flat.some((t) => t.trim())) return texts.map(() => null);
@@ -146,20 +187,18 @@
         const usable = items.filter((t) => t.trim());
         if (!usable.length) return items.map(() => null);
         if (items.length === 1) {
-          const out = await post(buildBody(items[0]), false);
+          const out = await post(items[0], false);
           return [this.sanitizeOutput(out, items[0])];
         }
-        const joined = await post(buildBody(items.join(SEP)), false);
+        const joined = await post(items.join(SEP), false);
         const parts = typeof joined === "string" ? joined.split(SPLIT_RE) : [];
         if (parts.length === items.length) {
           return items.map((input, i) => this.sanitizeOutput(parts[i], input));
         }
         if (depth >= 4) return items.map(() => null);
         const mid = Math.ceil(items.length / 2);
-        const [left, right] = await Promise.all([
-          translateChunkOfTexts(items.slice(0, mid), depth + 1),
-          translateChunkOfTexts(items.slice(mid), depth + 1),
-        ]);
+        const left = await translateChunkOfTexts(items.slice(0, mid), depth + 1);
+        const right = await translateChunkOfTexts(items.slice(mid), depth + 1);
         return left.concat(right);
       };
 
@@ -196,6 +235,7 @@
           }
           this.authToken = token;
           this.authExpiresAt = decodeJwtExpiry(token);
+          writeSharedTokens({ edge: { token, expiresAt: this.authExpiresAt } });
           this.authFailedUntil = 0;
           this.authFailStreak = 0;
           this.authCooldownMs = this.authBaseCooldownMs;
@@ -251,9 +291,16 @@
       }
     }
 
-    async ensureToken() {
+    async ensureToken(force) {
       const skewMs = 60 * 1000;
-      if (this.authToken && Date.now() + skewMs < this.authExpiresAt) {
+      if (!force && this.authToken && Date.now() + skewMs < this.authExpiresAt) {
+        return this.authToken;
+      }
+      const shared = force ? null : await readSharedTokens();
+      const edge = shared && shared.edge;
+      if (edge && edge.token && Date.now() + skewMs < Number(edge.expiresAt || 0)) {
+        this.authToken = edge.token;
+        this.authExpiresAt = Number(edge.expiresAt);
         return this.authToken;
       }
       if (Date.now() < this.authFailedUntil) {
@@ -278,7 +325,11 @@
       const query = new URLSearchParams();
       query.set("api-version", API_VERSION);
       query.append("to", this.normalizeTarget(targetLanguage));
-      const from = String(sourceLanguage || "").trim();
+      let from = String(sourceLanguage || "").trim();
+      // The v3 API only knows the script-tagged Chinese codes; "zh-CN" is rejected with a 400.
+      if (/^zh/i.test(from)) {
+        from = /^zh[-_](tw|hk|mo|hant)/i.test(from) ? "zh-Hant" : "zh-Hans";
+      }
       if (from && from !== "auto" && from !== "auto-detect") {
         query.set("from", from);
       }
@@ -339,7 +390,7 @@
         if (error?.status === 401 || error?.status === 403) {
           this.authToken = "";
           this.authExpiresAt = 0;
-          const renewed = await this.ensureToken();
+          const renewed = await this.ensureToken(true);
           headers.Authorization = `Bearer ${renewed}`;
           const retryPayload = await this.performTranslateRequest(url, body, headers);
           return retryPayload.map((row, index) => this.sanitizeOutput(row?.translations?.[0]?.text, texts[index]));
@@ -377,12 +428,9 @@
       if (groups.length <= 1) {
         return this.schedule(() => this.translateChunk(safeTexts, options), priority);
       }
-      const output = [];
-      for (const group of groups) {
-        const part = await this.schedule(() => this.translateChunk(group, options), priority);
-        output.push(...part);
-      }
-      return output;
+      return ROOT.runEngineGroups(groups, (group) =>
+        this.schedule(() => this.translateChunk(group, options), priority)
+      );
     }
 
     async translateChunk(safeTexts, options) {

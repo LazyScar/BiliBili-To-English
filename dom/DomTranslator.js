@@ -92,8 +92,46 @@
     danmaku: AREA_SELECTORS.danmaku.join(","),
     captions: AREA_SELECTORS.captions.join(","),
   };
+  const AREA_ORDER = ["comments", "dynamic", "danmaku", "captions"];
+  const AREA_RANK = { page: 0, captions: 1, danmaku: 2, dynamic: 3, comments: 4 };
+  const ANY_AREA_SELECTOR = AREA_ORDER.map((area) => AREA_COMBINED_SELECTORS[area]).join(",");
+  const OWNED_SELECTOR = "[data-bte-owned='1']";
+  const DANMAKU_MIN_GAP_MS = 1000;
+  const DANMAKU_MAX_WAIT_MS = 5000;
+  const DANMAKU_MAX_BATCH = 60;
   const STRICT_ALLOWED_TAGS = new Set(["SPAN", "P", "A", "BUTTON", "LABEL", "H1", "H2", "H3", "LI", "DT", "DD"]);
   const INLINE_WRAP_TAGS = new Set(["SPAN", "A", "B", "I", "EM", "STRONG", "MARK", "FONT", "SMALL", "SUB", "SUP", "U", "BDI", "LABEL"]);
+
+  function editableState(value) {
+    if (value === null) return null;
+    const v = String(value).toLowerCase();
+    if (v === "" || v === "true" || v === "plaintext-only") return true;
+    return v === "false" ? false : null;
+  }
+
+  function ownArea(element) {
+    if (!element.matches(ANY_AREA_SELECTOR)) return "page";
+    return AREA_ORDER.find((area) => element.matches(AREA_COMBINED_SELECTORS[area])) || "page";
+  }
+
+  // Bilibili's comments are nested web components; closest() stops at each shadow root.
+  function areaAcrossShadowRoots(element) {
+    let best = "page";
+    let el = element;
+    while (el) {
+      for (const area of AREA_ORDER) {
+        if (AREA_RANK[area] <= AREA_RANK[best]) break;
+        if (el.closest(AREA_COMBINED_SELECTORS[area])) {
+          best = area;
+          break;
+        }
+      }
+      if (best === "comments") return best;
+      const root = el.getRootNode ? el.getRootNode() : null;
+      el = root && root.host ? root.host : null;
+    }
+    return best;
+  }
 
   function isFormControl(el) {
     if (!el || !el.tagName) return false;
@@ -124,10 +162,11 @@
       this.settingsManager = settingsManager;
       this.settings = null;
       this.running = false;
-      this.observers = new Set();
+      this.observers = new Map();
       this.observedRoots = new WeakSet();
       this.lazyObserver = null;
       this.lazyObserved = new WeakSet();
+      this.lazyElements = new Set();
       this.pendingNodes = new Set();
       this.flushScheduled = false;
       this.flushInProgress = false;
@@ -160,15 +199,30 @@
       this.creatorGateUrl = "";
       this.handleMutations = this.handleMutations.bind(this);
       this.handleHover = this.handleHover.bind(this);
+      this.hideHoverTip = this.hideHoverTip.bind(this);
+      this.hoverTip = null;
       this.hoverBound = false;
       this.hoverPending = new WeakSet();
       this.titleObserver = null;
       this.titleOriginal = "";
       this.titleInjected = "";
+      this.walkTraits = null;
+      this.creatorRoute = undefined;
+      this.fitWrapped = new Set();
+      this.pageWork = 0;
+      this.rescanWorkSeen = 0;
+      this.rescanIdle = 0;
+      this.danmakuJobs = [];
+      this.danmakuBusy = false;
+      this.danmakuTimer = null;
+      this.danmakuSentAt = 0;
     }
 
     async initialize() {
       this.settings = await this.settingsManager.initialize();
+      if (!this.nameUnsubscribe && typeof this.translationManager.onNameResolved === "function") {
+        this.nameUnsubscribe = this.translationManager.onNameResolved((phrase) => this.refreshSource(phrase));
+      }
       this.injectStyles();
     }
 
@@ -184,13 +238,22 @@
         return;
       }
       this.syncHoverBinding();
+      if (!this.settings?.learn?.fitText) this.clearOverflowFit();
       this.beginCreatorLayoutGate();
       if (prevLanguage && prevLanguage !== this.settings.targetLanguage) {
         this.retranslateFromSavedOriginals();
-        this.queueFullRescan();
-      } else {
-        this.queueNode(document.body);
       }
+      this.queueFullRescan();
+    }
+
+    // A better translation became available for this text (an official name): show it.
+    refreshSource(source) {
+      if (!this.canRun()) return;
+      this.textState.forEach((state, node) => {
+        if (!node.isConnected || (state.original || "").trim() !== source) return;
+        state.lastSource = "";
+        this.processTextNode(node);
+      });
     }
 
     retranslateFromSavedOriginals() {
@@ -215,7 +278,7 @@
           return;
         }
         state.inflightSig = "";
-        if (language === "en") {
+        {
           const relative = this.localizeRelativeTime(source);
           if (relative) {
             this.applyTextMode(node, state, source, relative, mode);
@@ -273,15 +336,19 @@
 
     queueFullRescan() {
       this.queueNode(document.body);
-      try {
-        document.querySelectorAll("*").forEach((el) => {
-          if (el.shadowRoot) {
+      const visit = (root, depth) => {
+        root.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot && depth < 8) {
             this.observeRoot(el.shadowRoot);
             this.queueNode(el.shadowRoot);
+            visit(el.shadowRoot, depth + 1);
           }
           if (el.tagName === "IFRAME") this.observeIFrame(el);
           if (el.tagName === "MICRO-APP") this.observeMicroApp(el);
         });
+      };
+      try {
+        visit(document, 0);
       } catch (_error) {
       }
       this.observeMicroApps();
@@ -295,8 +362,10 @@
     }
 
     isCreatorRoute() {
-      const host = location.hostname || "";
-      return host === "member.bilibili.com";
+      if (this.creatorRoute === undefined) {
+        this.creatorRoute = (location.hostname || "") === "member.bilibili.com";
+      }
+      return this.creatorRoute;
     }
 
     isRouteExcluded() {
@@ -409,23 +478,46 @@
       if (this.lazyObserver || typeof IntersectionObserver === "undefined") return;
       const vh = window.innerHeight || 800;
       const aheadPx = Math.round(vh * this._aheadViewports);
-      const rootMargin = `${Math.round(vh * 0.5)}px 0px ${aheadPx}px 0px`;
+      const triggerPx = Math.max(Math.round(vh * 0.5), Math.round(aheadPx * 0.5));
+      const rootMargin = `${Math.round(vh * 0.5)}px 0px ${triggerPx}px 0px`;
       this.lazyObserver = new IntersectionObserver(
         (entries) => {
           if (!this.canRun()) return;
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting) return;
-            this.lazyObserver.unobserve(entry.target);
-            this.lazyObserved.delete(entry.target);
-            this.queueNode(entry.target);
-          });
+          if (entries.some((entry) => entry.isIntersecting)) this.releaseLazyNearViewport();
         },
         { rootMargin }
       );
     }
 
+    // Releases everything in the look-ahead zone at once: one request per stretch of scrolling.
+    releaseLazyNearViewport() {
+      const vh = window.innerHeight || 800;
+      const aheadPx = vh * (this._aheadViewports || 1);
+      this.lazyElements.forEach((element) => {
+        if (!element.isConnected) {
+          this.unobserveLazy(element);
+          return;
+        }
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom >= -vh && rect.top <= vh + aheadPx) {
+          this.unobserveLazy(element);
+          this.queueNode(element);
+        }
+      });
+    }
+
+    unobserveLazy(element) {
+      try {
+        this.lazyObserver.unobserve(element);
+      } catch (_error) {
+      }
+      this.lazyObserved.delete(element);
+      this.lazyElements.delete(element);
+    }
+
     queueOverflowFit(element) {
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+      if (!this.settings?.learn?.fitText) return;
       if (!this._fitQueue) this._fitQueue = new Set();
       this._fitQueue.add(element);
       if (this._fitScheduled) return;
@@ -443,7 +535,10 @@
 
     applyOverflowFit(el) {
       if (!el || !el.isConnected) return;
-      el.classList.remove("bte-fit-wrap");
+      if (this.fitWrapped.has(el)) {
+        el.classList.remove("bte-fit-wrap");
+        this.fitWrapped.delete(el);
+      }
       if (!this.settings?.learn?.fitText) return;
       if (!el.clientWidth) return;
       if (el.scrollWidth <= el.clientWidth + 1) return;
@@ -459,46 +554,106 @@
         style.whiteSpace === "nowrap";
       if (!clipped) return;
       el.classList.add("bte-fit-wrap");
+      this.fitWrapped.add(el);
+    }
+
+    clearOverflowFit() {
+      this.fitWrapped.forEach((el) => el.classList.remove("bte-fit-wrap"));
+      this.fitWrapped.clear();
     }
 
     syncHoverBinding() {
       const want = !!(this.settings && this.settings.learn && this.settings.learn.hoverTranslate);
       if (want && !this.hoverBound) {
         document.addEventListener("mouseover", this.handleHover, { passive: true, capture: true });
+        document.addEventListener("scroll", this.hideHoverTip, { passive: true, capture: true });
+        document.addEventListener("mouseout", this.hideHoverTip, { passive: true, capture: true });
         this.hoverBound = true;
       } else if (!want && this.hoverBound) {
         document.removeEventListener("mouseover", this.handleHover, { capture: true });
+        document.removeEventListener("scroll", this.hideHoverTip, { capture: true });
+        document.removeEventListener("mouseout", this.hideHoverTip, { capture: true });
         this.hoverBound = false;
+      }
+      if (!want && this.hoverTip) {
+        this.hoverTip.remove();
+        this.hoverTip = null;
+        this.hoverTipFor = null;
       }
     }
 
+    // Translated text shows its Chinese original; Chinese text gets translated.
     handleHover(event) {
       if (!this.canRun()) return;
       if (!this.settings?.learn?.hoverTranslate) return;
-      const el = event.target;
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      const el = path[0] && path[0].nodeType === Node.ELEMENT_NODE ? path[0] : event.target;
       if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+      if (this.hoverTip && (el === this.hoverTip || this.hoverTip.contains(el))) return;
+      const original = this.originalShownFor(el);
+      if (original) {
+        this.showHoverTip(el, original);
+        return;
+      }
+      this.hideHoverTip();
       if (this.hoverPending.has(el)) return;
       if (this.shouldSkipElement(el)) return;
       if (el.childElementCount > 0) return;
-      const textNode = Array.from(el.childNodes).find(
-        (n) => n.nodeType === Node.TEXT_NODE && /[一-鿿]/.test(n.nodeValue || "")
-      );
+      const textNode = Array.from(el.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && /[一-鿿]/.test(n.nodeValue || ""));
       if (!textNode) return;
-      const state = this.ensureTextState(textNode);
-      if (state.applied && state.translation) return;
       this.hoverPending.add(el);
       this.processTextNode(textNode, { force: true });
       this.dispatchTranslations();
+    }
+
+    originalShownFor(el) {
+      const parts = [];
+      el.childNodes.forEach((n) => {
+        if (n.nodeType !== Node.TEXT_NODE) return;
+        const st = this.textState.get(n);
+        if (st && st.applied && st.original && (n.nodeValue || "").trim() !== st.original.trim()) parts.push(st.original.trim());
+      });
+      if (parts.length) return parts.join(" ");
+      return typeof ROOT.captionOriginalFor === "function" ? ROOT.captionOriginalFor(el) : null;
+    }
+
+    showHoverTip(el, text) {
+      if (!this.hoverTip) {
+        const tip = document.createElement("div");
+        tip.setAttribute("data-bte-owned", "1");
+        tip.className = "bte-hover-tip";
+        this.hoverTip = tip;
+      }
+      const tip = this.hoverTip;
+      // In fullscreen only the fullscreen element is drawn.
+      const host = document.fullscreenElement || document.body || document.documentElement;
+      if (tip.parentNode !== host) host.appendChild(tip);
+      if (this.hoverTipFor === el && tip.style.display === "block" && tip.textContent === text) return;
+      this.hoverTipFor = el;
+      tip.textContent = text;
+      const rect = el.getBoundingClientRect();
+      const vw = window.innerWidth || 1024;
+      tip.style.left = `${Math.max(6, Math.min(rect.left, vw - 330))}px`;
+      tip.style.top = rect.bottom + 44 > (window.innerHeight || 800) ? `${Math.max(6, rect.top - 38)}px` : `${rect.bottom + 6}px`;
+      tip.style.display = "block";
+    }
+
+    hideHoverTip(event) {
+      if (event && event.type === "mouseout" && event.relatedTarget) return;
+      this.hoverTipFor = null;
+      if (this.hoverTip) this.hoverTip.style.display = "none";
     }
 
     observeLazy(element) {
       if (!this.lazyObserver || !element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (this.lazyObserved.has(element)) return;
       this.lazyObserved.add(element);
+      this.lazyElements.add(element);
       try {
         this.lazyObserver.observe(element);
       } catch (_error) {
         this.lazyObserved.delete(element);
+        this.lazyElements.delete(element);
       }
     }
 
@@ -513,9 +668,16 @@
         this.lazyObserver = null;
       }
       this.lazyObserved = new WeakSet();
+      this.lazyElements.clear();
       if (this.hoverBound) {
         document.removeEventListener("mouseover", this.handleHover, { capture: true });
+        document.removeEventListener("scroll", this.hideHoverTip, { capture: true });
+        document.removeEventListener("mouseout", this.hideHoverTip, { capture: true });
         this.hoverBound = false;
+      }
+      if (this.hoverTip) {
+        this.hoverTip.remove();
+        this.hoverTip = null;
       }
       this.hoverPending = new WeakSet();
       this.pendingNodes.clear();
@@ -523,12 +685,17 @@
       this.dispatchPending = false;
       this.textJobs = [];
       this.attrJobs = [];
+      this.danmakuJobs = [];
+      if (this.danmakuTimer) {
+        clearTimeout(this.danmakuTimer);
+        this.danmakuTimer = null;
+      }
       if (this.commentPoll) {
         clearInterval(this.commentPoll);
         this.commentPoll = null;
       }
       if (this.rescanPoll) {
-        clearInterval(this.rescanPoll);
+        clearTimeout(this.rescanPoll);
         this.rescanPoll = null;
       }
       this.clearCreatorGateTimer();
@@ -539,6 +706,7 @@
         this.titleObserver = null;
       }
       if (restore) {
+        this.clearOverflowFit();
         this.restoreOriginals();
       } else {
         this.timestampState.clear();
@@ -607,7 +775,7 @@
         clearInterval(this.commentPoll);
       }
       this.commentPoll = setInterval(() => {
-        if (!this.canRun()) return;
+        if (!this.canRun() || document.hidden) return;
         const app = document.getElementById("commentapp");
         const biliComments = app ? app.querySelector("bili-comments") : null;
         if (!biliComments) return;
@@ -620,11 +788,21 @@
 
     startRescanPoll() {
       if (this.rescanPoll) {
-        clearInterval(this.rescanPoll);
+        clearTimeout(this.rescanPoll);
       }
-      const intervalMs = this.isCreatorRoute() ? 1200 : 2800;
-      this.rescanPoll = setInterval(() => {
-        if (!this.canRun()) return;
+      const baseMs = this.isCreatorRoute() ? 1200 : 2800;
+      this.rescanIdle = 0;
+      this.rescanWorkSeen = this.pageWork;
+      const schedule = () => {
+        this.rescanPoll = setTimeout(() => {
+          rescan();
+          schedule();
+        }, baseMs * Math.min(8, 2 ** this.rescanIdle));
+      };
+      const rescan = () => {
+        if (!this.canRun() || document.hidden) return;
+        this.rescanIdle = this.pageWork === this.rescanWorkSeen ? this.rescanIdle + 1 : 0;
+        this.rescanWorkSeen = this.pageWork;
         this.queueNode(document.body);
         this.observeMicroApps();
         const app = document.getElementById("commentapp");
@@ -633,7 +811,12 @@
           this.queueNode(biliComments.shadowRoot || biliComments);
         }
         this.scanTimestamps();
-      }, intervalMs);
+      };
+      schedule();
+    }
+
+    notePageWork(area) {
+      if (area !== "danmaku") this.pageWork += 1;
     }
 
     observePageTitle() {
@@ -683,9 +866,10 @@
     observeRoot(root) {
       if (!root || this.observedRoots.has(root)) return;
       this.observedRoots.add(root);
+      this.pageWork += 1;
       const observer = new MutationObserver(this.handleMutations);
       observer.observe(root, OBSERVER_CONFIG);
-      this.observers.add(observer);
+      this.observers.set(root, observer);
       this.queueNode(root);
     }
 
@@ -900,17 +1084,20 @@
         const nodes = Array.from(this.pendingNodes);
         this.pendingNodes.clear();
         const limit = Math.min(this.maxNodesPerFlush, nodes.length);
+        this.walkTraits = new Map();
         for (let i = 0; i < limit; i += 1) {
           this.processNode(nodes[i]);
         }
         for (let i = limit; i < nodes.length; i += 1) {
           this.pendingNodes.add(nodes[i]);
         }
+        if (this.spacingParents.size) this.flushSiblingSpacing(false);
         this.cleanupCounter += 1;
         if (this.cleanupCounter % 20 === 0) {
           this.pruneStateMaps();
         }
       } finally {
+        this.walkTraits = null;
         this.flushInProgress = false;
         this._adaptFlushSize(Date.now() - t0);
       }
@@ -957,6 +1144,19 @@
           }
           this.iframeOverlays.delete(iframe);
         }
+      });
+      this.timestampState.forEach((_state, element) => {
+        if (!element || !element.isConnected) this.timestampState.delete(element);
+      });
+      // An observer keeps its root alive: let go of comment threads the page has removed.
+      this.observers.forEach((observer, root) => {
+        if (root.isConnected) return;
+        observer.disconnect();
+        this.observers.delete(root);
+        this.observedRoots.delete(root);
+      });
+      this.fitWrapped.forEach((element) => {
+        if (!element.isConnected) this.fitWrapped.delete(element);
       });
     }
 
@@ -1015,14 +1215,53 @@
       }
     }
 
+    elementTraits(element) {
+      const memo = this.walkTraits;
+      if (!memo) return this.computeTraits(element);
+      let traits = memo.get(element);
+      if (traits) return traits;
+      const parent = element.parentElement;
+      if (parent) {
+        const base = this.elementTraits(parent);
+        const own = ownArea(element);
+        const editable = editableState(element.getAttribute("contenteditable"));
+        traits = {
+          owned: base.owned || element.matches(OWNED_SELECTOR),
+          time: base.time || element.matches(TIME_CONTAINER_SELECTOR),
+          area: AREA_RANK[own] > AREA_RANK[base.area] ? own : base.area,
+          editable: editable === null ? base.editable : editable,
+        };
+      } else {
+        traits = this.computeTraits(element);
+      }
+      memo.set(element, traits);
+      return traits;
+    }
+
+    computeTraits(element) {
+      let editable = false;
+      for (let el = element; el; el = el.parentElement) {
+        const state = editableState(el.getAttribute("contenteditable"));
+        if (state !== null) {
+          editable = state;
+          break;
+        }
+      }
+      return {
+        owned: !!element.closest(OWNED_SELECTOR),
+        time: !!element.closest(TIME_CONTAINER_SELECTOR),
+        area: areaAcrossShadowRoots(element),
+        editable,
+      };
+    }
+
     shouldSkipElement(element) {
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return true;
-      if (element.closest("[data-bte-owned='1']")) return true;
       if (SKIP_TAGS.has(element.tagName)) return true;
-      if (element.isContentEditable || element.getAttribute("contenteditable") === "true") return true;
+      const traits = this.elementTraits(element);
+      if (traits.owned || traits.time || traits.editable || traits.area === "captions") return true;
+      if (document.designMode === "on") return true;
       if (this.shouldDelayMicroAreaElement(element)) return true;
-      if (this.isTimeContainer(element)) return true;
-      if (this.detectArea(element) === "captions") return true;
       if (this.isStrictCreatorMode() && this.isStrictExcluded(element)) return true;
       return false;
     }
@@ -1046,11 +1285,7 @@
 
     detectArea(element) {
       if (!element || !element.closest) return "page";
-      if (element.closest(AREA_COMBINED_SELECTORS.comments)) return "comments";
-      if (element.closest(AREA_COMBINED_SELECTORS.dynamic)) return "dynamic";
-      if (element.closest(AREA_COMBINED_SELECTORS.danmaku)) return "danmaku";
-      if (element.closest(AREA_COMBINED_SELECTORS.captions)) return "captions";
-      return "page";
+      return this.elementTraits(element).area;
     }
 
     isAreaEnabled(area) {
@@ -1072,11 +1307,7 @@
 
     isTimeContainer(element) {
       if (!element || !element.closest) return false;
-      try {
-        return !!element.closest(TIME_CONTAINER_SELECTOR);
-      } catch (_error) {
-        return false;
-      }
+      return this.elementTraits(element).time;
     }
 
     isTimeLikeText(text) {
@@ -1088,6 +1319,7 @@
     shouldSkipText(text, parent) {
       const normalized = String(text || "").trim();
       if (!normalized) return true;
+      if (ROOT.Slang && parent && ROOT.Slang.line(normalized, this.targetLocale(), this.detectArea(parent))) return false;
       if (this.isTimeLikeText(normalized)) return true;
       if (/^https?:\/\/\S+$/.test(normalized)) return true;
       if (/^[\p{P}\p{S}\s]+$/u.test(normalized)) return true;
@@ -1235,9 +1467,10 @@
         return;
       }
 
-      if (language === "en") {
+      {
         const relative = this.localizeRelativeTime(source);
         if (relative) {
+          this.notePageWork(area);
           this.applyTextMode(node, state, source, relative, mode);
           state.lastSource = source;
           state.lastLanguage = language;
@@ -1253,6 +1486,7 @@
         titleCase,
       });
       if (quick.translation) {
+        this.notePageWork(area);
         this.applyTextMode(node, state, source, quick.translation, mode);
         state.lastSource = source;
         state.lastLanguage = language;
@@ -1274,7 +1508,8 @@
         return;
       }
 
-      const priority = this.getPriorityBucket(node.parentElement);
+      // Danmaku only exist while on screen; measuring each one would force a layout per line.
+      const priority = area === "danmaku" ? 2 : this.getPriorityBucket(node.parentElement);
       if (priority <= 0 && this.lazyObserver) {
         this.observeLazy(node.parentElement);
         state.inflightSig = "";
@@ -1287,6 +1522,7 @@
       }
       state.requestId = (state.requestId || 0) + 1;
       state.inflightSig = signature;
+      this.notePageWork(area);
       this.textJobs.push({
         node,
         area,
@@ -1314,8 +1550,9 @@
     }
 
     processAttributes(element) {
-      if (!this.canRun()) return;
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+      if (!ATTRS.some((attr) => element.hasAttribute(attr))) return;
+      if (!this.canRun()) return;
       if (!element.isConnected) return;
       if (this.shouldSkipElement(element)) return;
       const area = this.detectArea(element);
@@ -1355,6 +1592,7 @@
         });
         if (quick.translation) {
           if (currentValue !== quick.translation) {
+            this.notePageWork(area);
             element.setAttribute(attr, quick.translation);
           }
           bucket.applied[attr] = quick.translation;
@@ -1376,10 +1614,15 @@
           return;
         }
 
+        if (this.lazyObserver && this.getPriorityBucket(element) <= 0) {
+          this.observeLazy(element);
+          return;
+        }
         const signature = `${language}::${source}`;
         if (bucket.inflight[attr] === signature) return;
         bucket.requestIds[attr] = (bucket.requestIds[attr] || 0) + 1;
         bucket.inflight[attr] = signature;
+        this.notePageWork(area);
         this.attrJobs.push({
           element,
           attr,
@@ -1399,43 +1642,98 @@
       return /(tag|tags|topic|category|chip|label|keyword|badge)/i.test(attr);
     }
 
+    targetLocale() {
+      return String((this.settings && this.settings.targetLanguage) || "en");
+    }
+
+    relativeLabel(value, unit) {
+      const lang = this.targetLocale();
+      const n = Number(value);
+      if (lang === "en" || typeof Intl === "undefined" || !Intl.RelativeTimeFormat) {
+        if (unit === "now") return "just now";
+        if (unit === "day" && n === 1) return "yesterday";
+        return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+      }
+      try {
+        if (!this._rtf || this._rtfLang !== lang) {
+          this._rtf = new Intl.RelativeTimeFormat(lang, { numeric: "auto" });
+          this._rtfLang = lang;
+        }
+        if (unit === "now") return this._rtf.format(0, "second");
+        return this._rtf.format(-n, unit);
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    dayWithTime(offsetDays, time) {
+      const lang = this.targetLocale();
+      if (lang === "en" || typeof Intl === "undefined" || !Intl.RelativeTimeFormat) {
+        return `${offsetDays === 0 ? "today" : "yesterday"} ${time}`;
+      }
+      const day = this.relativeLabel(offsetDays === 0 ? 0 : 1, "day");
+      return day ? `${day} ${time}` : null;
+    }
+
+    monthDayLabel(date, withYear) {
+      const lang = this.targetLocale();
+      if (lang !== "en" && typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+        try {
+          return new Intl.DateTimeFormat(lang, {
+            month: "short",
+            day: "numeric",
+            ...(withYear ? { year: "numeric" } : {}),
+          }).format(date);
+        } catch (_error) {
+        }
+      }
+      const label = `${MONTH_ABBR[date.getMonth()]} ${date.getDate()}`;
+      return withYear ? `${label}, ${date.getFullYear()}` : label;
+    }
+
     localizeRelativeTime(text) {
       const s = String(text || "").trim();
       if (!s || s.length > 12) return null;
-      const plural = (n, unit) => `${n} ${unit}${n === "1" ? "" : "s"} ago`;
       let m;
-      if (/^(刚刚|刚才|现在|此刻)$/.test(s)) return "just now";
-      if (/^昨天$/.test(s)) return "yesterday";
-      if (/^前天$/.test(s)) return "2 days ago";
-      if ((m = s.match(/^(\d+)\s*秒(钟)?前$/))) return plural(m[1], "second");
-      if ((m = s.match(/^(\d+)\s*分钟前$/))) return plural(m[1], "minute");
-      if ((m = s.match(/^(\d+)\s*(个?小时)前$/))) return plural(m[1], "hour");
-      if ((m = s.match(/^(\d+)\s*天前$/))) return plural(m[1], "day");
-      if ((m = s.match(/^(\d+)\s*(周|星期|个星期)前$/))) return plural(m[1], "week");
-      if ((m = s.match(/^(\d+)\s*个月前$/))) return plural(m[1], "month");
-      if ((m = s.match(/^(\d+)\s*年前$/))) return plural(m[1], "year");
-      if ((m = s.match(/^今天\s*(\d{1,2}:\d{2})$/))) return `today ${m[1]}`;
-      if ((m = s.match(/^昨天\s*(\d{1,2}:\d{2})$/))) return `yesterday ${m[1]}`;
+      if (/^(刚刚|刚才|现在|此刻)$/.test(s)) return this.relativeLabel(0, "now");
+      if (/^昨天$/.test(s)) return this.relativeLabel(1, "day");
+      if (/^前天$/.test(s)) return this.relativeLabel(2, "day");
+      if ((m = s.match(/^(\d+)\s*秒(钟)?前$/))) return this.relativeLabel(m[1], "second");
+      if ((m = s.match(/^(\d+)\s*分钟前$/))) return this.relativeLabel(m[1], "minute");
+      if ((m = s.match(/^(\d+)\s*(个?小时)前$/))) return this.relativeLabel(m[1], "hour");
+      if ((m = s.match(/^(\d+)\s*天前$/))) return this.relativeLabel(m[1], "day");
+      if ((m = s.match(/^(\d+)\s*(周|星期|个星期)前$/))) return this.relativeLabel(m[1], "week");
+      if ((m = s.match(/^(\d+)\s*个月前$/))) return this.relativeLabel(m[1], "month");
+      if ((m = s.match(/^(\d+)\s*年前$/))) return this.relativeLabel(m[1], "year");
+      if ((m = s.match(/^今天\s*(\d{1,2}:\d{2})$/))) return this.dayWithTime(0, m[1]);
+      if ((m = s.match(/^昨天\s*(\d{1,2}:\d{2})$/))) return this.dayWithTime(1, m[1]);
       return null;
     }
 
-    formatRelativeTime(text) {
+    // loose: text found by scanning the page, not inside a time element, so "10.5" is not a date.
+    formatRelativeTime(text, loose) {
       const s = String(text || "").trim();
       let date;
-      const full = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+      let hasYear = false;
+      const full = s.match(/^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
       if (full) {
+        if (loose && full[2] === ".") return null;
+        hasYear = true;
         date = new Date(
-          Number(full[1]), Number(full[2]) - 1, Number(full[3]),
-          Number(full[4] || 0), Number(full[5] || 0), Number(full[6] || 0)
+          Number(full[1]), Number(full[3]) - 1, Number(full[4]),
+          Number(full[5] || 0), Number(full[6] || 0), Number(full[7] || 0)
         );
+        if (date.getMonth() !== Number(full[3]) - 1 || date.getDate() !== Number(full[4])) return null;
       } else {
-        const short = s.match(/^(\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+        const short = s.match(/^(\d{1,2})([-/.])(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
         if (!short) return null;
+        if (loose && (short[2] === "." || short[1].length !== 2 || short[3].length !== 2)) return null;
         date = new Date(
           new Date().getFullYear(),
-          Number(short[1]) - 1, Number(short[2]),
-          Number(short[3] || 0), Number(short[4] || 0), Number(short[5] || 0)
+          Number(short[1]) - 1, Number(short[3]),
+          Number(short[4] || 0), Number(short[5] || 0), Number(short[6] || 0)
         );
+        if (date.getMonth() !== Number(short[1]) - 1 || date.getDate() !== Number(short[3])) return null;
       }
       if (isNaN(date.getTime())) return null;
       const diffMs = Date.now() - date.getTime();
@@ -1443,33 +1741,31 @@
       const diffMinutes = Math.floor(diffMs / 60000);
       const diffHours = Math.floor(diffMs / 3600000);
       const diffDays = Math.floor(diffMs / 86400000);
-      if (diffDays >= 30) {
-        const label = `${MONTH_ABBR[date.getMonth()]} ${date.getDate()}`;
-        return full ? `${label}, ${date.getFullYear()}` : label;
-      }
-      if (diffMinutes < 1) return "just now";
-      if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? "s" : ""} ago`;
-      if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
-      if (diffDays === 1) return "yesterday";
-      if (diffDays < 7) return `${diffDays} days ago`;
-      const weeks = Math.floor(diffDays / 7);
-      return `${weeks} week${weeks !== 1 ? "s" : ""} ago`;
+      if (diffDays >= 30) return this.monthDayLabel(date, hasYear);
+      if (diffMinutes < 1) return this.relativeLabel(0, "now");
+      if (diffMinutes < 60) return this.relativeLabel(diffMinutes, "minute");
+      if (diffHours < 24) return this.relativeLabel(diffHours, "hour");
+      if (diffDays < 7) return this.relativeLabel(diffDays, "day");
+      return this.relativeLabel(Math.floor(diffDays / 7), "week");
     }
 
-    processTimestampElement(element) {
+    processTimestampElement(element, loose) {
       if (!element || !element.isConnected) return;
       const text = String(element.textContent || "").trim();
       if (!text) return;
       if (!this.timestampState.has(element)) {
-        this.timestampState.set(element, { original: text, applied: "" });
+        this.timestampState.set(element, { original: text, applied: "", strict: !loose });
       }
       const state = this.timestampState.get(element);
+      const lang = this.targetLocale();
+      if (state.applied && text === state.applied && state.lang === lang) return;
       const sourceText = (state.applied && text === state.applied) ? state.original : text;
       if (sourceText !== state.applied) {
         state.original = sourceText;
       }
-      const relative = this.formatRelativeTime(sourceText);
+      const relative = this.formatRelativeTime(sourceText, loose && !state.strict);
       if (relative === null) return;
+      state.lang = lang;
       if (state.applied === relative && text === state.applied) return;
       element.textContent = relative;
       state.applied = relative;
@@ -1488,10 +1784,10 @@
         while ((textNode = walker.nextNode())) {
           const text = String(textNode.nodeValue || "").trim();
           if (text.length < 5 || text.length > 30) continue;
-          if (this.formatRelativeTime(text) === null) continue;
+          if (this.formatRelativeTime(text, true) === null) continue;
           const parent = textNode.parentElement;
           if (parent && parent.childElementCount === 0) {
-            this.processTimestampElement(parent);
+            this.processTimestampElement(parent, true);
           }
         }
       } catch (_error) {}
@@ -1505,11 +1801,12 @@
     scanTimestamps() {
       if (!this.canRun()) return;
       try {
-        this.timestampState.forEach((_state, el) => {
-          if (el && el.isConnected) this.processTimestampElement(el);
+        this.timestampState.forEach((state, el) => {
+          if (el && el.isConnected) this.processTimestampElement(el, !state.strict);
         });
       } catch (_error) {}
       const now = Date.now();
+      if (typeof document !== "undefined" && document.hidden) return;
       if (now - this.lastTimestampDiscovery < 1000) return;
       this.lastTimestampDiscovery = now;
       try {
@@ -1523,10 +1820,10 @@
         while ((textNode = walker.nextNode())) {
           const text = String(textNode.nodeValue || "").trim();
           if (text.length < 4 || text.length > 30) continue;
-          if (this.formatRelativeTime(text) === null) continue;
+          if (this.formatRelativeTime(text, true) === null) continue;
           const parent = textNode.parentElement;
           if (!parent || parent.childElementCount > 0) continue;
-          this.processTimestampElement(parent);
+          this.processTimestampElement(parent, true);
         }
       } catch (_error) {}
       try {
@@ -1611,141 +1908,171 @@
       return bySource;
     }
 
+    applyTextResult(job, translated, final) {
+      if (!this.running) return;
+      const state = this.textState.get(job.node);
+      if (!state || state.requestId !== job.requestId) return;
+      state.inflightSig = "";
+      // Players reuse elements (danmaku especially); never put an old line's translation on new text.
+      const live = job.node.nodeValue || "";
+      const showsSource = live.trim() === job.source ||
+        (!!state.injectedValue && live === state.injectedValue && (state.original || "").trim() === job.source);
+      if (!showsSource) return;
+      if (translated) {
+        this.applyTextMode(job.node, state, job.source, translated, job.mode);
+        state.lastSource = job.source;
+        state.lastLanguage = job.language;
+        state.lastMode = job.mode;
+        this.recordSpacingParent(job.node);
+      } else if (final) {
+        this.removeBilingualNode(state);
+        if (state.applied && job.node.isConnected && job.node.nodeValue !== state.original) {
+          job.node.nodeValue = state.original;
+        }
+        state.applied = false;
+        state.injectedValue = "";
+      }
+    }
+
+    applyAttrResult(job, translated, final) {
+      if (!this.running) return;
+      const bucket = this.attrState.get(job.element);
+      if (!bucket || bucket.requestIds[job.attr] !== job.requestId) return;
+      bucket.inflight[job.attr] = "";
+      if (!job.element.isConnected) return;
+      if (!translated) {
+        if (final) {
+          bucket.lastSource[job.attr] = job.source;
+          bucket.lastLanguage[job.attr] = job.language;
+        }
+        return;
+      }
+      if (job.element.getAttribute(job.attr) !== translated) {
+        job.element.setAttribute(job.attr, translated);
+      }
+      bucket.applied[job.attr] = translated;
+      bucket.lastSource[job.attr] = job.source;
+      bucket.lastLanguage[job.attr] = job.language;
+    }
+
+    // Attribute text rides along with visible text only while it fits in the same request; the
+    // rest goes after all visible and nearby text.
+    splitAttributeOverflow(groups) {
+      const limit = typeof this.translationManager.batchItemLimit === "function" ? this.translationManager.batchItemLimit() : 25;
+      const out = [];
+      groups.forEach((group) => {
+        const textSources = new Set(group.jobs.filter((job) => job.node).map((job) => job.source));
+        const attrOnly = group.jobs.filter((job) => !job.node && !textSources.has(job.source));
+        const attrSources = new Set(attrOnly.map((job) => job.source));
+        if (!attrOnly.length || !textSources.size || textSources.size + attrSources.size <= limit) {
+          out.push(group);
+          return;
+        }
+        const moved = new Set(attrOnly);
+        out.push({ ...group, jobs: group.jobs.filter((job) => !moved.has(job)) });
+        out.push({ ...group, priority: (group.priority || 0) - 1.5, jobs: attrOnly, deferred: true });
+      });
+      return out;
+    }
+
     async processQueuedTranslations() {
       if (!this.textJobs.length && !this.attrJobs.length) {
         return;
       }
+      const jobs = this.textJobs.splice(0, this.textJobs.length).concat(this.attrJobs.splice(0, this.attrJobs.length));
+      const danmaku = jobs.filter((job) => job.area === "danmaku");
+      if (danmaku.length) this.queueDanmakuJobs(danmaku);
+      await this.runJobs(danmaku.length ? jobs.filter((job) => job.area !== "danmaku") : jobs);
+    }
 
-      const textJobs = this.textJobs.splice(0, this.textJobs.length);
-      const attrJobs = this.attrJobs.splice(0, this.attrJobs.length);
+    async runJobs(jobs) {
+      if (!jobs.length) return;
+      const apply = (job, translated, final) =>
+        job.node ? this.applyTextResult(job, translated, final) : this.applyAttrResult(job, translated, final);
 
+      const groups = this.splitAttributeOverflow(this.groupJobsByAreaLanguage(jobs));
+      const runGroup = async (group) => {
+        if (!this.canRun()) return;
+        const jobsBySource = new Map();
+        group.jobs.forEach((job) => {
+          if (!jobsBySource.has(job.source)) jobsBySource.set(job.source, []);
+          jobsBySource.get(job.source).push(job);
+        });
+        const map = await this.translateGroupedJobs(group, {
+          targetLanguage: group.language,
+          area: group.area,
+          titleCase: group.titleCase,
+        }, ({ source, translation }) => {
+          if (translation) (jobsBySource.get(source) || []).forEach((job) => apply(job, translation, false));
+        });
+        if (!this.canRun()) return;
+        group.jobs.forEach((job) => apply(job, map.get(job.source) || null, true));
+      };
       try {
-      if (textJobs.length) {
-        const textGroups = this.groupJobsByAreaLanguage(textJobs);
-        for (const group of textGroups) {
-          if (!this.canRun()) return;
-          const jobsBySource = new Map();
-          group.jobs.forEach((job) => {
-            if (!jobsBySource.has(job.source)) jobsBySource.set(job.source, []);
-            jobsBySource.get(job.source).push(job);
-          });
-          const applyTextSource = (source, translated) => {
-            const jobs = jobsBySource.get(source) || [];
-            jobs.forEach((job) => {
-              const state = this.textState.get(job.node);
-              if (!state || state.requestId !== job.requestId) return;
-              state.inflightSig = "";
-              if (translated) {
-                this.applyTextMode(job.node, state, job.source, translated, job.mode);
-                state.lastSource = job.source;
-                state.lastLanguage = job.language;
-                state.lastMode = job.mode;
-                this.recordSpacingParent(job.node);
-              }
-            });
-          };
-          const map = await this.translateGroupedJobs(group, {
-            targetLanguage: group.language,
-            area: group.area,
-            titleCase: group.titleCase,
-          }, ({ source, translation }) => {
-            if (translation) {
-              applyTextSource(source, translation);
-            }
-          });
-          group.jobs.forEach((job) => {
-            if (!this.canRun()) return;
-            const state = this.textState.get(job.node);
-            if (!state || state.requestId !== job.requestId) return;
-            state.inflightSig = "";
-            const translated = map.get(job.source) || null;
-            if (translated) {
-              this.applyTextMode(job.node, state, job.source, translated, job.mode);
-              state.lastSource = job.source;
-              state.lastLanguage = job.language;
-              state.lastMode = job.mode;
-              this.recordSpacingParent(job.node);
-            } else {
-              this.removeBilingualNode(state);
-              if (state.applied && job.node.isConnected && job.node.nodeValue !== state.original) {
-                job.node.nodeValue = state.original;
-              }
-              state.applied = false;
-              state.injectedValue = "";
-            }
-          });
-        }
-      }
-
-      if (attrJobs.length) {
-        const attrGroups = this.groupJobsByAreaLanguage(attrJobs);
-        for (const group of attrGroups) {
-          if (!this.canRun()) return;
-          const jobsBySource = new Map();
-          group.jobs.forEach((job) => {
-            if (!jobsBySource.has(job.source)) jobsBySource.set(job.source, []);
-            jobsBySource.get(job.source).push(job);
-          });
-          const applyAttrSource = (source, translated) => {
-            const jobs = jobsBySource.get(source) || [];
-            jobs.forEach((job) => {
-              const bucket = this.attrState.get(job.element);
-              if (!bucket || bucket.requestIds[job.attr] !== job.requestId) return;
-              bucket.inflight[job.attr] = "";
-              if (!translated || !job.element.isConnected) return;
-              if (job.element.getAttribute(job.attr) !== translated) {
-                job.element.setAttribute(job.attr, translated);
-              }
-              bucket.applied[job.attr] = translated;
-              bucket.lastSource[job.attr] = job.source;
-              bucket.lastLanguage[job.attr] = job.language;
-            });
-          };
-          const map = await this.translateGroupedJobs(group, {
-            targetLanguage: group.language,
-            area: group.area,
-            titleCase: group.titleCase,
-          }, ({ source, translation }) => {
-            if (translation) {
-              applyAttrSource(source, translation);
-            }
-          });
-          group.jobs.forEach((job) => {
-            if (!this.canRun()) return;
-            const bucket = this.attrState.get(job.element);
-            if (!bucket || bucket.requestIds[job.attr] !== job.requestId) return;
-            bucket.inflight[job.attr] = "";
-            if (!job.element.isConnected) return;
-            const translated = map.get(job.source) || null;
-            if (!translated) {
-              bucket.lastSource[job.attr] = job.source;
-              bucket.lastLanguage[job.attr] = job.language;
-              return;
-            }
-            if (job.element.getAttribute(job.attr) !== translated) {
-              job.element.setAttribute(job.attr, translated);
-            }
-            bucket.applied[job.attr] = translated;
-            bucket.lastSource[job.attr] = job.source;
-            bucket.lastLanguage[job.attr] = job.language;
-          });
-        }
-      }
-      this.flushSiblingSpacing();
+        await Promise.all(groups.filter((group) => !group.deferred).map(runGroup));
+        await Promise.all(groups.filter((group) => group.deferred).map(runGroup));
+        if (!this.canRun()) return;
+        this.flushSiblingSpacing();
       } finally {
-        textJobs.forEach((job) => {
-          const state = this.textState.get(job.node);
-          if (state && state.requestId === job.requestId && state.inflightSig) {
-            state.inflightSig = "";
-          }
-        });
-        attrJobs.forEach((job) => {
-          const bucket = this.attrState.get(job.element);
-          if (bucket && bucket.requestIds[job.attr] === job.requestId && bucket.inflight[job.attr]) {
-            bucket.inflight[job.attr] = "";
-          }
-        });
+        jobs.forEach((job) => this.releaseJob(job));
       }
+    }
+
+    releaseJob(job) {
+      if (job.node) {
+        const state = this.textState.get(job.node);
+        if (state && state.requestId === job.requestId && state.inflightSig) {
+          state.inflightSig = "";
+        }
+        return;
+      }
+      const bucket = this.attrState.get(job.element);
+      if (bucket && bucket.requestIds[job.attr] === job.requestId && bucket.inflight[job.attr]) {
+        bucket.inflight[job.attr] = "";
+      }
+    }
+
+    queueDanmakuJobs(jobs) {
+      const now = Date.now();
+      jobs.forEach((job) => {
+        job.queuedAt = now;
+        this.danmakuJobs.push(job);
+      });
+      this.pumpDanmaku();
+    }
+
+    pumpDanmaku() {
+      if (this.danmakuBusy || this.danmakuTimer || !this.danmakuJobs.length) return;
+      const wait = this.danmakuSentAt + DANMAKU_MIN_GAP_MS - Date.now();
+      if (wait > 0) {
+        this.danmakuTimer = setTimeout(() => {
+          this.danmakuTimer = null;
+          this.pumpDanmaku();
+        }, wait);
+        return;
+      }
+      const now = Date.now();
+      const queued = this.danmakuJobs.splice(0, this.danmakuJobs.length);
+      const live = queued.filter((job) =>
+        now - job.queuedAt <= DANMAKU_MAX_WAIT_MS && (job.node || job.element).isConnected
+      );
+      const batch = live.slice(-DANMAKU_MAX_BATCH);
+      const sent = new Set(batch);
+      queued.forEach((job) => {
+        if (!sent.has(job)) this.releaseJob(job);
+      });
+      if (!batch.length || !this.canRun()) {
+        batch.forEach((job) => this.releaseJob(job));
+        return;
+      }
+      this.danmakuSentAt = now;
+      this.danmakuBusy = true;
+      this.runJobs(batch)
+        .catch((error) => console.warn("BTE danmaku translation failed:", error))
+        .finally(() => {
+          this.danmakuBusy = false;
+          this.pumpDanmaku();
+        });
     }
 
     isInlineJoinChar(char) {
@@ -1787,7 +2114,23 @@
       return "";
     }
 
+    // Text at the edge of a node that we replaced with a translation.
+    translatedEdge(node, fromEnd) {
+      let text = node;
+      if (node && node.nodeType === Node.ELEMENT_NODE) {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n) => ((n.nodeValue || "").trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+        });
+        text = fromEnd ? walker.lastChild() : walker.firstChild();
+      }
+      if (!text || text.nodeType !== Node.TEXT_NODE) return false;
+      const state = this.textState.get(text);
+      return !!(state && state.applied && (text.nodeValue || "").trim() !== (state.original || "").trim());
+    }
+
     needsSiblingSpace(leftNode, rightNode) {
+      // Only around our own text: never add spaces inside words the page split into pieces.
+      if (!this.translatedEdge(leftNode, true) && !this.translatedEdge(rightNode, false)) return false;
       const tail = this.getTailChar(leftNode);
       const head = this.getHeadChar(rightNode);
       if (!tail || !head) return false;
@@ -1834,7 +2177,7 @@
       }
     }
 
-    flushSiblingSpacing() {
+    flushSiblingSpacing(withForced = true) {
       this.spacingNodes.forEach((node) => {
         if (!node || !node.isConnected) {
           this.spacingNodes.delete(node);
@@ -1847,11 +2190,13 @@
       this.spacingParents.forEach((parent) => {
         this.enforceSiblingSpacing(parent);
       });
-      try {
-        document.querySelectorAll(FORCED_SPACING_SELECTORS.join(",")).forEach((parent) => {
-          this.enforceSiblingSpacing(parent);
-        });
-      } catch (_error) {
+      if (withForced) {
+        try {
+          document.querySelectorAll(FORCED_SPACING_SELECTORS.join(",")).forEach((parent) => {
+            this.enforceSiblingSpacing(parent);
+          });
+        } catch (_error) {
+        }
       }
       this.spacingParents.clear();
     }
@@ -1875,6 +2220,11 @@
         .bte-sideBySide {
           display: inline;
           font-size: 0.95em;
+        }
+        .bte-hover-tip {
+          position: fixed; z-index: 2147483646; max-width: 320px; padding: 5px 9px;
+          background: #23262e; color: #e6e9ef; border-radius: 6px; font: 13px/1.45 system-ui, sans-serif;
+          box-shadow: 0 3px 10px rgba(0,0,0,.3); pointer-events: none; white-space: pre-wrap;
         }
         .bte-fit-wrap {
           white-space: normal !important;

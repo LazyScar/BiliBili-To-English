@@ -1,4 +1,4 @@
-const ruDictionary = {
+var ruDictionary = {
   "我关注的主播": "Подписки",
   "我的稿件": "Черновики",
   "预约": "Бронь",

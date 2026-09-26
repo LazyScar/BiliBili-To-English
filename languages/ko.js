@@ -1,4 +1,4 @@
-const koDictionary = {
+var koDictionary = {
   "我关注的主播": "팔로잉",
   "我的稿件": "초안",
   "预约": "예약",

@@ -197,12 +197,9 @@
       const to = this.toBaiduLang(options?.targetLanguage) || "en";
       const priority = options?.priority;
       const groups = this.buildGroups(texts);
-      const output = [];
-      for (const group of groups) {
-        const translated = await this.schedule(() => this.translateGroup(group, { appid, secret, from, to }), priority);
-        output.push(...translated);
-      }
-      return output;
+      return ROOT.runEngineGroups(groups, (group) =>
+        this.schedule(() => this.translateGroup(group, { appid, secret, from, to }), priority)
+      );
     }
 
     async translateGroup(texts, ctx) {

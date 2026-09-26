@@ -1,4 +1,4 @@
-const esDictionary = {
+var esDictionary = {
   "我关注的主播": "Siguiendo",
   "我的稿件": "Borradores",
   "预约": "Reservar",

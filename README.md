@@ -31,7 +31,7 @@ Translate BiliBili into English (or another language) right on the page, in real
 Browser extension that translates the BiliBili interface, comments, video titles, and subtitles. Works on **Chrome, Firefox, Brave, Opera, Edge** and other Chromium‑based browsers. Install, choose a language, and browse — translations appear automatically.
 
 <p align="center">
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/">
+  <a href="https://addons.mozilla.org/firefox/addon/bilibili-to-english/">
     <img src="https://github.com/material-extensions/material-icons-browser-extension/raw/main/assets/firefox-addons.png" height="60">
   </a>
   <a href="https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab">
@@ -42,7 +42,7 @@ Browser extension that translates the BiliBili interface, comments, video titles
 ## Installation
 
 ### Browser stores
-- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/en-US/firefox/addon/bilibili-to-english/)
+- **Firefox** – [Mozilla Add‑ons](https://addons.mozilla.org/firefox/addon/bilibili-to-english/)
 - **Chrome** – [Chrome Web Store](https://chromewebstore.google.com/detail/bilibili-to-english/difagjkcpcpjmdopoijepnkflhiemcab)
 
 ### Manual
@@ -75,6 +75,10 @@ Browser extension that translates the BiliBili interface, comments, video titles
 - Real‑time subtitle translation while watching videos
 - Full interface translation (buttons, menus, video info, creator/studio pages)
 - Comment area translation — read without leaving the page
+- Bilingual mode, shows the original Chinese next to the translation
+- Dates and "x minutes ago" shown in your language
+- Google, Microsoft, Yandex, DeepL, Baidu, Youdao and Papago (the last four need your own API key)
+- Alt+Shift+Y to turn translation on/off
 - Popup language picker with flag icons, accessible from the toolbar
 - Language preference remembered automatically
 
@@ -99,7 +103,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to add another.
 
 ## How it works
 
-The extension uses a local dictionary for frequent BiliBili terms. If a term isn’t found, it sends the text to an online translation API (Google, Deepl, Microsoft). The page updates in real time — no reload required.
+The extension uses a local dictionary for frequent BiliBili terms. If a term isn’t found, it sends the text to an online translation API (Google, Microsoft, DeepL and others). If one doesn't work it tries another. The page updates in real time — no reload required.
 
 ---
 
@@ -113,6 +117,9 @@ It needs to read and modify BiliBili pages to replace text. Permission is only a
 
 **Which translation services are used?**  
 A built‑in dictionary plus public translation APIs (Google Translate, etc.). No setup needed.
+
+**Google Translate keeps failing?**  
+Google sometimes blocks you for a while if too much gets translated. Set the service to Auto and it will switch to another one.
 
 **Is data collected?**  
 No personal data is ever collected. Only the text you translate is sent to the translation API; it isn’t stored or tracked.

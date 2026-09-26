@@ -1,4 +1,4 @@
-const viDictionary = {
+var viDictionary = {
     "我关注的主播": "Đang theo dõi",
     "我的稿件": "Bản nháp",
     "预约": "Đặt trước",

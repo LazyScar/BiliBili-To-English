@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "BiliBili To English",
-  "version": "2.0.7",
+  "version": "2.1.0",
   "description": "Translate BiliBili content to multiple languages including English, French, Russian and more.",
   "author": "LazyScar",
   "permissions": [
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
     "https://*.bilibili.com/*",
@@ -29,6 +30,14 @@
     "https://api.github.com/*",
     "https://www.wikidata.org/*"
   ],
+  "commands": {
+    "toggle-translation": {
+      "suggested_key": {
+        "default": "Alt+Shift+Y"
+      },
+      "description": "Turn translation on or off"
+    }
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -40,6 +49,7 @@
   "background": {
     "service_worker": "background.js",
     "scripts": [
+      "translation/cacheStore.js",
       "background.js"
     ]
   },
@@ -76,6 +86,8 @@
         "translation/engines/youdao.js",
         "translation/engines/papago.js",
         "translation/properNouns.js",
+        "translation/cacheStore.js",
+        "translation/slang.js",
         "translation/TranslationManager.js",
         "dom/DomTranslator.js",
         "captions/CaptionManager.js",

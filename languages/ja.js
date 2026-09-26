@@ -1,4 +1,4 @@
-const jaDictionary = {
+var jaDictionary = {
   "我关注的主播": "フォロー中",
   "我的稿件": "下書き",
   "预约": "予約",

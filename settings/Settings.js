@@ -220,7 +220,26 @@
   function storageSet(area, payload) {
     const storage = getStorage(area);
     if (!storage) return Promise.resolve();
-    return new Promise((resolve) => storage.set(payload, resolve));
+    return new Promise((resolve) => {
+      try {
+        storage.set(payload, () => {
+          const err = globalThis.chrome.runtime && globalThis.chrome.runtime.lastError;
+          if (err) console.warn(`BTE settings: storage.${area}.set failed:`, err.message || err);
+          resolve();
+        });
+      } catch (error) {
+        console.warn(`BTE settings: storage.${area}.set failed:`, error);
+        resolve();
+      }
+    });
+  }
+
+  function sameStored(stored, next) {
+    try {
+      return JSON.stringify(stored) === JSON.stringify(next);
+    } catch (_error) {
+      return false;
+    }
   }
 
   function storageRemove(area, keys) {
@@ -248,7 +267,8 @@
       ]);
       const migrated = this.migrate(syncData, localData);
       this.settings = normalizeSettings(migrated);
-      await this.persist(this.settings, { silent: true });
+      // Only written when something changed: sync storage has an hourly write quota.
+      await this.persist(this.settings, { silent: true, current: { sync: syncData, local: localData } });
       if (
         !this.storageListenerAttached &&
         globalThis.chrome &&
@@ -312,7 +332,8 @@
     }
 
     async clearPersistentCache() {
-      await storageRemove("local", [PERSISTENT_CACHE_KEY]);
+      if (ROOT.CacheStore) await ROOT.CacheStore.removeAll();
+      else await storageRemove("local", [PERSISTENT_CACHE_KEY]);
     }
 
     migrate(syncData, localData) {
@@ -384,26 +405,31 @@
         delete safe.papago.clientId;
         delete safe.papago.clientSecret;
       }
-      await Promise.all([
-        storageSet("sync", {
-          [STORAGE_KEY]: safe,
-          enabled: safe.enabled,
-          selectedLanguage: safe.targetLanguage,
-          language: safe.targetLanguage,
-          darkMode: safe.darkMode,
-        }),
-        storageSet("local", {
-          [LOCAL_DEEPL_KEY]: deeplKey,
-          [LOCAL_MICROSOFT_KEY]: microsoftKey,
-          [LOCAL_MICROSOFT_REGION]: microsoftRegion,
-          [LOCAL_BAIDU_APPID]: baiduAppid,
-          [LOCAL_BAIDU_SECRET]: baiduSecret,
-          [LOCAL_YOUDAO_APPKEY]: youdaoAppKey,
-          [LOCAL_YOUDAO_APPSECRET]: youdaoAppSecret,
-          [LOCAL_PAPAGO_CLIENTID]: papagoClientId,
-          [LOCAL_PAPAGO_CLIENTSECRET]: papagoClientSecret,
-        }),
-      ]);
+      const syncPayload = {
+        [STORAGE_KEY]: safe,
+        enabled: safe.enabled,
+        selectedLanguage: safe.targetLanguage,
+        language: safe.targetLanguage,
+        darkMode: safe.darkMode,
+      };
+      const localPayload = {
+        [LOCAL_DEEPL_KEY]: deeplKey,
+        [LOCAL_MICROSOFT_KEY]: microsoftKey,
+        [LOCAL_MICROSOFT_REGION]: microsoftRegion,
+        [LOCAL_BAIDU_APPID]: baiduAppid,
+        [LOCAL_BAIDU_SECRET]: baiduSecret,
+        [LOCAL_YOUDAO_APPKEY]: youdaoAppKey,
+        [LOCAL_YOUDAO_APPSECRET]: youdaoAppSecret,
+        [LOCAL_PAPAGO_CLIENTID]: papagoClientId,
+        [LOCAL_PAPAGO_CLIENTSECRET]: papagoClientSecret,
+      };
+      const current = options && options.current;
+      const unchanged = (stored, payload) =>
+        !!stored && Object.keys(payload).every((key) => sameStored(stored[key], payload[key]));
+      const writes = [];
+      if (!current || !unchanged(current.sync, syncPayload)) writes.push(storageSet("sync", syncPayload));
+      if (!current || !unchanged(current.local, localPayload)) writes.push(storageSet("local", localPayload));
+      await Promise.all(writes);
       if (!options || !options.silent) {
         this.emit(settings);
       }

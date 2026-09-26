@@ -1,4 +1,4 @@
-const idDictionary = {
+var idDictionary = {
   "我关注的主播": "Mengikuti",
   "我的稿件":  "Draf",
   "预约":  "Pesan",

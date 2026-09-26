@@ -44,9 +44,10 @@
   }
 
   function truncateInput(q) {
-    const len = q.length;
+    const chars = Array.from(q);
+    const len = chars.length;
     if (len <= 20) return q;
-    return q.substring(0, 10) + len + q.substring(len - 10);
+    return chars.slice(0, 10).join("") + len + chars.slice(len - 10).join("");
   }
 
   class YoudaoEngine {
@@ -123,7 +124,7 @@
       const settled = await Promise.allSettled(
         texts.map((text) => this.schedule(() => this.translateSingle(String(text), ctx), priority))
       );
-      return settled.map((result) => (result.status === "fulfilled" ? result.value : null));
+      return ROOT.fromSettledResults(settled);
     }
 
     async translateSingle(text, ctx) {

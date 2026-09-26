@@ -158,12 +158,12 @@
       const lang = source && source !== target ? `${source}-${target}` : target;
       const priority = options?.priority;
       const groups = this.buildGroups(texts);
-      const output = [];
-      for (const group of groups) {
-        const translated = await this.schedule(() => this.translateGroup(group, lang, false), priority);
-        output.push(...translated);
-      }
-      return output;
+      return ROOT.runEngineGroups(groups, (group) => {
+        if (Date.now() < this.cooldownUntil) {
+          throw Object.assign(new Error("Yandex unavailable (cooldown)"), { reason: this.lastError || "cooldown" });
+        }
+        return this.schedule(() => this.translateGroup(group, lang, false), priority);
+      });
     }
 
     async translateGroup(texts, lang, retriedUcid) {
@@ -199,7 +199,7 @@
         this.noteRateLimited();
       }
 
-      if (!res.ok || (code !== null && code !== 200)) {
+      if (!res.ok || !data || (code !== null && code !== 200)) {
         this.lastError = res.status === 429 ? "rate-limited" : "unavailable";
         this.cooldownUntil = Date.now() + FAIL_COOLDOWN_MS;
         throw Object.assign(

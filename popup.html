@@ -163,7 +163,13 @@
     .icon-dd-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid var(--bg-2); }
     .icon-dd-list::-webkit-scrollbar-thumb:hover { background: var(--text-soft); }
     .icon-dd-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: background .12s ease; }
-    .icon-dd-item:hover { background: var(--accent-soft); }
+    .icon-dd-item:hover, .icon-dd-item:focus { background: var(--accent-soft); outline: none; }
+    .icon-dd-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-strong); }
+    .menu-row:focus-visible, .enable-btn:focus-visible, .toggle-btn:focus-visible, .icon-dd-btn:focus-visible,
+    .foot-btn:focus-visible, .iconbtn:focus-visible, .text-btn:focus-visible, .clear-btn:focus-visible,
+    .modal-actions button:focus-visible, .switch input:focus-visible + .slider {
+      outline: 2px solid var(--accent-strong); outline-offset: 2px;
+    }
     .icon-dd-item.active { background: var(--accent-soft); font-weight: 600; }
 
     .icon-dd-item.active::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; font-size: 12px; }
@@ -214,7 +220,8 @@
       font-family: Consolas, monospace; font-size: 11px; color: var(--text);
       white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto;
     }
-    .modal-actions { display: flex; gap: 8px; padding: 0 13px 13px; }
+    .modal-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 13px 13px; }
+    .modal-actions .primary:not([style*="none"]) { flex-basis: 100%; }
     .modal-actions button {
       flex: 1 1 auto; border: none; cursor: pointer; border-radius: 9px;
       padding: 8px 10px; font-size: 12px; font-weight: 600;
@@ -388,10 +395,11 @@
           </span>
         </div>
         <div class="engine-status" id="engineStatus" style="display:none;"></div>
+        <div class="engine-status" id="pageHint" style="display:none;" data-i18n="notOnBili">Open a bilibili.com page to see translations.</div>
       </section>
 
       <div class="enable-row">
-        <button id="enableBtn" class="enable-btn">
+        <button id="enableBtn" class="enable-btn" aria-pressed="false">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 3v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7.5 6.5a7 7 0 1 0 9 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span id="enableLabel" data-i18n="enable">Enable translation</span>
         </button>
@@ -447,7 +455,7 @@
         <button class="menu-row" data-open="panelExtras">
           <span class="menu-left">
             <svg class="mi" width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"/></svg>
-            <span data-i18n="extrasTitle">Extras</span><span class="beta-badge" data-i18n="experimental">Experimental</span>
+            <span data-i18n="extrasTitle">Extras</span>
           </span>
           <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -495,19 +503,18 @@
     <div class="view-panel" id="panelExtras">
       <div class="panel-head">
         <button class="iconbtn" data-close aria-label="Back" data-i18n-aria="back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <span class="panel-title" data-i18n="extrasTitle">Extras</span><span class="beta-badge" data-i18n="experimental">Experimental</span>
+        <span class="panel-title" data-i18n="extrasTitle">Extras</span>
         <span class="save-hint" data-panel-hint></span>
       </div>
       <div class="panel-body">
-        <div class="hint" data-i18n="extrasIntro">Still being tested. All off by default, and each can change how the page looks.</div>
         <section class="card tip-host">
 <div class="row">
             <span class="row-label" data-i18n="blurCaption">Blur caption until hover<span class="info"><span class="q">?</span><span class="tip" data-i18n="blurCaptionHint">Read the Chinese first, then hover the subtitle to reveal the translation.</span></span></span>
             <label class="switch" aria-label="Blur caption translation until hover" data-i18n-aria="blurCaption"><input type="checkbox" id="blurCaptionToggle" /><span class="slider"></span></label>
           </div>
           <div class="row">
-            <span class="row-label" data-i18n="hoverTranslate">Hover to translate<span class="info"><span class="q">?</span><span class="tip" data-i18n="hoverTranslateHint">Point at any Chinese text to translate just that piece.</span></span></span>
-            <label class="switch" aria-label="Hover Chinese text to translate" data-i18n-aria="hoverTranslate"><input type="checkbox" id="hoverTranslateToggle" /><span class="slider"></span></label>
+            <span class="row-label" data-i18n="hoverTranslate">Hover to compare<span class="info"><span class="q">?</span><span class="tip" data-i18n="hoverTranslateHint">Point at translated text to see the Chinese original, or at Chinese text to translate it.</span></span></span>
+            <label class="switch" aria-label="Hover to compare" data-i18n-aria="hoverTranslate"><input type="checkbox" id="hoverTranslateToggle" /><span class="slider"></span></label>
           </div>
           <div class="row">
             <span class="row-label" data-i18n="fitText">Let clipped text wrap<span class="info"><span class="q">?</span><span class="tip" data-i18n="fitTextHint">Only affects text the site cuts off. Off by default because changing the page layout can look worse.</span></span></span>
@@ -648,7 +655,7 @@
 
         <div class="card-title" data-i18n="aboutTitle">About</div>
         <section class="card">
-          <div class="row"><span class="row-label" data-i18n="versionLabel">Version</span><span class="row-value" id="aboutVersion">2.0.7</span></div>
+          <div class="row"><span class="row-label" data-i18n="versionLabel">Version</span><span class="row-value" id="aboutVersion">2.1.0</span></div>
           <div class="row"><span class="row-label" data-i18n="installedFrom">Installed from</span><span class="row-value" id="installSource">-</span></div>
         </section>
         <button class="text-btn" id="checkUpdatesBtn" data-i18n="checkUpdates">Check for updates</button>
@@ -670,7 +677,8 @@
         <div class="modal-code" id="errModalCode"></div>
       </div>
       <div class="modal-actions">
-        <button class="primary" id="errModalCopy" data-i18n="errCopy">Copy details</button>
+        <button class="primary" id="errModalAuto" data-i18n="errUseAuto" style="display:none;">Switch to Auto</button>
+        <button class="ghost" id="errModalCopy" data-i18n="errCopy">Copy details</button>
         <button class="ghost" id="errModalClose" data-i18n="errClose">Close</button>
       </div>
     </div>
@@ -684,7 +692,7 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.94.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
       GitHub
     </button>
-    <span class="ver-wrap" id="verWrap"><span class="ver" id="appVersion">v2.0.7</span><span class="ver-arrow" id="verArrow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="ver-new" id="verNew"></span></span>
+    <span class="ver-wrap" id="verWrap"><span class="ver" id="appVersion">v2.1.0</span><span class="ver-arrow" id="verArrow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="ver-new" id="verNew"></span></span>
   </footer>
 
   <script src="languages/en.js"></script>
@@ -699,6 +707,7 @@
   <script src="languages/es.js"></script>
   <script src="languages/languageManager.js"></script>
   <script src="settings/Settings.js"></script>
+  <script src="translation/cacheStore.js"></script>
   <script src="languages/popupI18n.js"></script>
   <script src="popup.js"></script>
 </body>

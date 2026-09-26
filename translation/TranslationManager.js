@@ -1,8 +1,6 @@
 (function () {
   const ROOT = (window.BTE = window.BTE || {});
 
-  const PERSISTENT_CACHE_KEY =
-    (ROOT.BTE_KEYS && ROOT.BTE_KEYS.PERSISTENT_CACHE_KEY) || "btePersistentCacheV2";
   const NEGATIVE_CACHE_SENTINEL = "__BTE_NO_TRANSLATION__";
   const NEGATIVE_CACHE_TTL_MS = 2 * 60 * 1000;
 
@@ -19,25 +17,27 @@
   const COUNT_PART = new RegExp("(\\d+(?:\\.\\d+)?)\\s*(" + COUNT_UNIT + ")", "g");
   const CHINESE_COUNT = new RegExp("(?:\\d+(?:\\.\\d+)?\\s*(?:" + COUNT_UNIT + "))+", "g");
 
-  function storageLocalGet(keys) {
-    if (!globalThis.chrome || !globalThis.chrome.storage || !globalThis.chrome.storage.local) {
-      return Promise.resolve({});
-    }
-    return new Promise((resolve) => globalThis.chrome.storage.local.get(keys, resolve));
-  }
-
   function storageLocalSet(payload) {
     if (!globalThis.chrome || !globalThis.chrome.storage || !globalThis.chrome.storage.local) {
       return Promise.resolve();
     }
-    return new Promise((resolve) => globalThis.chrome.storage.local.set(payload, resolve));
+    return new Promise((resolve) => {
+      try {
+        globalThis.chrome.storage.local.set(payload, resolve);
+      } catch (_error) {
+        resolve();
+      }
+    });
   }
 
-  function storageLocalRemove(keys) {
-    if (!globalThis.chrome || !globalThis.chrome.storage || !globalThis.chrome.storage.local) {
-      return Promise.resolve();
+  const CACHE_LOG_ROLL_CHARS = 256 * 1024;
+  const CACHE_MAX_LOGS = 8;
+
+  function requestCacheCompaction() {
+    try {
+      globalThis.chrome.runtime.sendMessage({ type: "bte:cacheCompact" }, () => void globalThis.chrome.runtime.lastError);
+    } catch (_error) {
     }
-    return new Promise((resolve) => globalThis.chrome.storage.local.remove(keys, resolve));
   }
 
   function createDeferred() {
@@ -128,6 +128,11 @@
       this.SEEN_COUNTS_MAX = 4000;
       this.persistBytes = 0;
       this.persistDirty = 0;
+      this.sessionLog = new Map();
+      this.logDirty = false;
+      this.logSession = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      this.logSeq = 0;
+      this.persistentLoad = null;
       this.PERSIST_DEBOUNCE_MS = 5000;
       this.PERSIST_MIN_DIRTY = 25;
       this.pending = new Map();
@@ -148,7 +153,34 @@
       this._engineWarnAt = {};
       this.engineStatus = null;
       this.properNouns = typeof ROOT.ProperNounResolver === "function" ? new ROOT.ProperNounResolver() : null;
+      this.nameListeners = new Set();
+      if (this.properNouns) {
+        this.properNouns.onResolved = (phrase, label) => this.nameListeners.forEach((fn) => {
+          try { fn(phrase, label); } catch (_error) { }
+        });
+      }
       this.engineHealth = {};
+      // Failed text waits before it is retried; several callers poll.
+      this.failureBackoff = new Map();
+      this.FAILURE_BACKOFF_MIN_MS = 5000;
+      this.FAILURE_BACKOFF_MAX_MS = 60000;
+    }
+
+    isBackingOff(key) {
+      const entry = this.failureBackoff.get(key);
+      if (!entry) return false;
+      if (Date.now() < entry.until) return true;
+      return false;
+    }
+
+    noteFailure(key) {
+      const prev = this.failureBackoff.get(key);
+      const delay = prev ? Math.min(this.FAILURE_BACKOFF_MAX_MS, prev.delay * 2) : this.FAILURE_BACKOFF_MIN_MS;
+      this.failureBackoff.delete(key);
+      this.failureBackoff.set(key, { until: Date.now() + delay, delay });
+      if (this.failureBackoff.size > 5000) {
+        this.failureBackoff.delete(this.failureBackoff.keys().next().value);
+      }
     }
 
     _health(name) {
@@ -183,6 +215,17 @@
       return (inCooldown ? 1e6 : 0) + failRate * 1500 + latency;
     }
 
+    officialName(normalizedRaw) {
+      if (!this.properNouns || !this.properNouns.enabled) return null;
+      this.properNouns.observe(normalizedRaw);
+      return this.properNouns.lookup(normalizedRaw) || null;
+    }
+
+    onNameResolved(listener) {
+      this.nameListeners.add(listener);
+      return () => this.nameListeners.delete(listener);
+    }
+
     applyProperNoun(sourceText, translated) {
       if (!this.properNouns || !this.properNouns.enabled) return translated;
       const canonical = this.properNouns.lookup(sourceText);
@@ -193,7 +236,11 @@
       return this.engineStatus || { selected: null, active: null, fellBack: false, reason: null, ok: true, at: 0 };
     }
 
-    _recordEngineStatus(primaryEngine, usedEngineBatch, anyTranslated) {
+    _recordEngineStatus(primaryEngine, usedEngineBatch, anyTranslated, threw) {
+      // A batch where every engine answered but nothing changed (English titles, numbers,
+      // usernames, emoji) is not an engine failure. Recording it as one made the popup report
+      // "Google Translate is unavailable / reason: failed" while Google was working fine.
+      if (!anyTranslated && !threw) return;
       const active = anyTranslated ? (usedEngineBatch.find((engine) => engine) || primaryEngine) : null;
       const fellBack = !!(anyTranslated && active && active !== primaryEngine);
       let reason = null;
@@ -238,7 +285,9 @@
       if (this.ready) return;
       this.settings = await this.settingsManager.initialize();
       this.memoryCache.setLimit(this.settings.cache.maxEntries);
-      await this.loadPersistentCache();
+      // Small frames (ads, widgets) rarely translate anything: they load the saved cache on first use.
+      if (this.isSubFrame()) this.persistentLoad = null;
+      else await this.ensurePersistentCache();
       this.changeUnsubscribe = this.settingsManager.onChange((nextSettings) => {
         const prevLanguage = this.settings && this.settings.targetLanguage;
         this.settings = nextSettings;
@@ -275,6 +324,26 @@
         if (engine === "yandex" && yandex && typeof yandex.ensureSid === "function") {
           Promise.resolve(yandex.ensureSid(false)).catch(() => {});
         }
+        if (engine === "google") this.preconnect("https://translate.googleapis.com");
+      } catch (_error) {
+      }
+    }
+
+    preconnect(origin) {
+      try {
+        if (typeof document === "undefined" || window.top !== window.self) return;
+        const add = () => {
+          if (!document.head || document.querySelector(`link[data-bte-preconnect="${origin}"]`)) return;
+          const link = document.createElement("link");
+          link.rel = "preconnect";
+          link.href = origin;
+          link.crossOrigin = "anonymous";
+          link.setAttribute("data-bte-owned", "1");
+          link.setAttribute("data-bte-preconnect", origin);
+          document.head.appendChild(link);
+        };
+        if (document.head) add();
+        else document.addEventListener("DOMContentLoaded", add, { once: true });
       } catch (_error) {
       }
     }
@@ -314,7 +383,7 @@
       return this.normalizeWhitespacePreservingLines(text);
     }
 
-    applyBoundarySpacing(text) {
+    applyBoundarySpacing(text, options) {
       const s = String(text || "");
       if (!s) return s;
       if (/https?:\/\//.test(s)) return s;
@@ -325,70 +394,18 @@
         return `\x02${protected_.length - 1}\x03`;
       };
       let working = s.replace(/\bBV[1-9A-Za-z]{10}\b/g, protect);
-      working = working.replace(/\b\d+(?:[PpKk]|FPS|fps|Fps|HDR|hdr|Hz|hz|HZ|bit|BIT|Bit)\b/g, protect);
+      if (!options || options.cjkDigits !== false) {
+        working = working
+          .replace(/([\u4e00-\u9fff])(\d)/g, "$1 $2")
+          .replace(/(\d)([\u4e00-\u9fff])/g, "$1 $2");
+      }
       working = working
-        .replace(/([A-Za-z])(\d)/g, "$1 $2")
-        .replace(/(\d)([A-Za-z])/g, "$1 $2")
-        .replace(/([\u4e00-\u9fff])(\d)/g, "$1 $2")
-        .replace(/(\d)([\u4e00-\u9fff])/g, "$1 $2")
-        .replace(/([a-z])([A-Z])/g, "$1 $2")
         .replace(/([A-Za-z0-9])([+|])([A-Za-z0-9])/g, "$1 $2 $3")
         .replace(/\s{2,}/g, " ");
       if (protected_.length) {
         working = working.replace(/\x02(\d+)\x03/g, (_, i) => protected_[Number(i)]);
       }
       return working;
-    }
-
-    splitMixedAlphaNumericToken(token) {
-      const out = [];
-      const walk = (value) => {
-        if (!value) return;
-        const match = String(value).match(/([A-Za-z]+)(\d+)([A-Za-z]*)/);
-        if (!match) {
-          out.push(value);
-          return;
-        }
-        const start = match.index || 0;
-        const end = start + match[0].length;
-        const prefix = value.slice(0, start);
-        const alphaLeft = match[1];
-        const digits = match[2];
-        const alphaRight = match[3];
-        const suffix = value.slice(end);
-        if (prefix) walk(prefix);
-        if (alphaLeft) out.push(alphaLeft);
-        if (digits) out.push(digits);
-        if (alphaRight) walk(alphaRight);
-        if (suffix) walk(suffix);
-      };
-      walk(token);
-      return out.filter(Boolean);
-    }
-
-    splitMixedAlphaNumericRecursively(text) {
-      if (/https?:\/\//.test(text)) return String(text || "");
-      const input = String(text || "");
-      const BV_RE = /^BV[1-9A-Za-z]{10}$/;
-      const processLine = (line) => {
-        const tokens = line.split(/\s+/).filter(Boolean);
-        const out = [];
-        tokens.forEach((token) => {
-          if (BV_RE.test(token) || /^\x02\d+\x03$/.test(token)) {
-            out.push(token);
-            return;
-          }
-          const parts = this.splitMixedAlphaNumericToken(token);
-          if (parts.length > 1) {
-            out.push(...parts);
-          } else {
-            out.push(token);
-          }
-        });
-        return out.join(" ");
-      };
-      if (!input.includes("\n")) return processLine(input);
-      return input.split("\n").map(processLine).join("\n");
     }
 
     groupDigits(value) {
@@ -461,17 +478,40 @@
     }
 
     preprocessInputText(text, targetLanguage) {
-      const counted = this.expandChineseCounts(text, this.resolveTargetLanguage(targetLanguage));
-      const spaced = this.applyBoundarySpacing(counted);
-      const splitMixed = this.splitMixedAlphaNumericRecursively(spaced);
-      return this.normalizeText(splitMixed);
+      const target = this.resolveTargetLanguage(targetLanguage);
+      const counted = this.expandChineseCounts(text, target);
+      const withSlang = ROOT.Slang ? ROOT.Slang.inline(counted, target) : counted;
+      const spaced = this.applyBoundarySpacing(withSlang);
+      return this.normalizeText(spaced);
+    }
+
+    localAnswer(normalizedRaw, targetLanguage, area) {
+      const counted = this.localizeCountOnly(normalizedRaw, targetLanguage);
+      if (counted) return counted;
+      if (!ROOT.Slang) return null;
+      const target = this.resolveTargetLanguage(targetLanguage);
+      const line = ROOT.Slang.line(normalizedRaw, target, area);
+      if (line) return line;
+      // Nothing Chinese left once the slang is given its meaning: that already is the translation.
+      if (/[\u3400-\u9fff]/.test(normalizedRaw)) {
+        const swapped = ROOT.Slang.inline(normalizedRaw, target);
+        if (swapped !== normalizedRaw && !/[\u3400-\u9fff]/.test(swapped)) {
+          return this.postprocessTranslationText(swapped, normalizedRaw, { targetLanguage: target }) || swapped;
+        }
+      }
+      return null;
     }
 
     toTitleCase(text) {
+      const small = new Set(["a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "for", "with", "by", "vs"]);
       return String(text || "")
         .split(/\s+/)
         .filter(Boolean)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .map((word, index) => {
+          if (/[A-Z]/.test(word)) return word.charAt(0).toUpperCase() + word.slice(1);
+          if (index > 0 && small.has(word)) return word;
+          return word.charAt(0).toUpperCase() + word.slice(1);
+        })
         .join(" ");
     }
 
@@ -484,10 +524,31 @@
       return words.every((word) => /^[A-Za-z][A-Za-z-]*$/.test(word));
     }
 
+    // Full-width punctuation a translator left next to Latin text: "done。" -> "done."
+    westernPunctuation(text) {
+      if (!/[。，！？：；、（）]/.test(text)) return text;
+      const map = { "。": ".", "，": ",", "！": "!", "？": "?", "：": ":", "；": ";", "、": ",", "（": "(", "）": ")" };
+      return text
+        .replace(/([A-Za-z0-9'")\]])\s*([。，！？：；、）])/g, (_m, before, p) => before + map[p] + (/[。，！？：；、]/.test(p) ? " " : ""))
+        .replace(/([A-Za-z0-9.,!?])?\s*（\s*([A-Za-z0-9])/g, (_m, before, ch) => (before ? before + " (" : "(") + ch)
+        .replace(/ +$/g, "").replace(/ +\n/g, "\n");
+    }
+
+    decodeEntities(text, input) {
+      if (!text.includes("&")) return text;
+      const src = String(input || "");
+      return text.replace(/&(#39|#x27|#34|quot|apos|amp|lt|gt|nbsp);/g, (m, name) => {
+        if (src.includes(m)) return m;
+        return { "#39": "'", "#x27": "'", "#34": '"', quot: '"', apos: "'", amp: "&", lt: "<", gt: ">", nbsp: " " }[name];
+      });
+    }
+
     postprocessTranslationText(value, input, options) {
       if (typeof value !== "string") return null;
-      let out = this.normalizeWhitespacePreservingLines(value);
-      out = this.applyBoundarySpacing(out);
+      let out = this.normalizeWhitespacePreservingLines(this.decodeEntities(value, input));
+      const target = String((options && options.targetLanguage) || "en").toLowerCase();
+      out = this.applyBoundarySpacing(out, { cjkDigits: !/^(ja|zh)/.test(target) });
+      if (!/^(ja|zh|ko)/.test(target)) out = this.westernPunctuation(out);
       out = out
         .replace(/\s+([,.;:!?])/g, "$1")
         .replace(/([([{])\s+/g, "$1")
@@ -503,6 +564,7 @@
         const restored = out.replace(/\s+([\u2460-\u2473\u2474-\u2487\u2488-\u249b])/g, "\n$1");
         if (restored.includes("\n")) out = restored.trimStart();
       }
+      out = this.repairShouting(input, out);
       out = this.applyEnglishGrammar(out, options);
       out = this.applyProperNoun(input, out);
       out = this.applyCaseShape(input, out);
@@ -527,25 +589,71 @@
         return /^[aeiou]/.test(w);
       };
       out = out.replace(/\b(a|an)\s+([A-Za-z][\w'-]*)/g, (match, article, word) => {
+        if (word.length > 1 && word === word.toUpperCase()) return match;
         const needsAn = vowelSound(word);
         const isUpper = article[0] === article[0].toUpperCase();
         const fixed = needsAn ? "an" : "a";
         return (isUpper ? fixed[0].toUpperCase() + fixed.slice(1) : fixed) + " " + word;
       });
 
-      out = out.replace(/\bi\b/g, "I");
+      out = out.replace(/\bi\b(?!\.\w)/g, "I");
 
       out = out
         .replace(/\s+([,.;:!?%])/g, "$1")
         .replace(/([,;])(?=[^\s\d])/g, "$1 ")
-        .replace(/([.!?])(?=[A-Za-z])/g, "$1 ")
+        .replace(/(\b[A-Za-z][a-z]+[.!?])(?=[A-Z][a-z])/g, "$1 ")
+        .replace(/([a-z][!?])(?=[a-z])/g, "$1 ")
         .replace(/\s{2,}/g, " ")
         .replace(/\(\s+/g, "(").replace(/\s+\)/g, ")")
         .trim();
 
-      out = out.replace(/([.!?]\s+|\n)([a-z])/g, (m, lead, ch) => lead + ch.toUpperCase());
+      const abbreviation = /(?:\b(?:[A-Za-z]\.){1,3}|\b(?:vs|etc|approx|ep|vol|no|mr|mrs|ms|dr|st|feat|ft)\.)\s+$/i;
+      out = out.replace(/([.!?]\s+|\n)([a-z])/g, (m, lead, ch, offset) => {
+        if (lead.charAt(0) === "." && abbreviation.test(out.slice(0, offset + lead.length))) return m;
+        return lead + ch.toUpperCase();
+      });
 
       return out;
+    }
+
+    // Batched lines sometimes come back in ALL CAPS; the source was not shouting, so neither is the line.
+    // The whole reply in capitals (a batch the translator shouted): short items can't be judged alone.
+    batchShouted(outputs, items) {
+      let letters = 0;
+      let upper = 0;
+      let sourceUpper = 0;
+      (outputs || []).forEach((out, i) => {
+        const found = String(out || "").match(/[A-Za-z]/g) || [];
+        letters += found.length;
+        upper += found.filter((c) => c <= "Z").length;
+        sourceUpper += (String((items[i] && items[i].text) || "").match(/[A-Z]/g) || []).length;
+      });
+      return letters >= 8 && upper / letters >= 0.9 && sourceUpper < upper / 4;
+    }
+
+    repairShouting(input, output, force) {
+      if (!output || !/[A-Z]{2}/.test(output)) return output;
+      if (force) {
+        const keepAll = new Set((String(input || "").match(/[A-Z][A-Z0-9]+/g) || []).map((w) => w.toLowerCase()));
+        const lowered = String(output).toLowerCase().replace(/[a-z][a-z0-9]*/g, (w) => (keepAll.has(w) ? w.toUpperCase() : w));
+        return lowered.replace(/\bi(?=\b|'(?:m|ll|ve|d)\b)/g, "I").replace(/(^\s*|[.!?…]\s+|\n\s*)([a-z])/g, (_m, lead, ch) => lead + ch.toUpperCase());
+      }
+      if (!/[A-Z]{3}/.test(output)) return output;
+      const src = String(input || "");
+      const srcLetters = src.match(/[A-Za-z]/g) || [];
+      if (srcLetters.length >= 6 && srcLetters.filter((c) => c <= "Z").length / srcLetters.length >= 0.8) return output;
+      const keep = new Set((src.match(/[A-Z][A-Z0-9]+/g) || []).map((w) => w.toLowerCase()));
+      return String(output).split("\n").map((line) => {
+        const letters = line.match(/[A-Za-z]/g) || [];
+        const words = line.match(/[A-Za-z]+/g) || [];
+        if (letters.length < 6 || words.length < 2) return line;
+        if (letters.filter((c) => c <= "Z").length / letters.length < 0.8) return line;
+        return line
+          .toLowerCase()
+          .replace(/[A-Za-z][A-Za-z0-9]*/g, (w) => (keep.has(w) ? w.toUpperCase() : w))
+          .replace(/\bi(?=\b|'(?:m|ll|ve|d)\b)/g, "I")
+          .replace(/(^\s*|[.!?…]\s+)([a-z])/g, (_m, lead, ch) => lead + ch.toUpperCase());
+      }).join("\n");
     }
 
     applyCaseShape(input, output) {
@@ -558,6 +666,8 @@
         return outFirst.toUpperCase() + outTrimmed.slice(1);
       }
       if (/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]/.test(inFirst) && /[a-z]/.test(outFirst)) {
+        const firstWord = outTrimmed.split(/\s/)[0];
+        if (/^[a-z]+[A-Z]/.test(firstWord) || /[./]/.test(firstWord)) return output;
         return outFirst.toUpperCase() + outTrimmed.slice(1);
       }
       return output;
@@ -613,6 +723,11 @@
         chain.push(name);
       };
 
+      if (options && options.engineOnly && options.engine) {
+        add(options.engine);
+        return chain;
+      }
+
       if (selected === "auto") {
         const keyless = ["google", "microsoft", "yandex"]
           .filter((name) => this.engines[name])
@@ -653,6 +768,12 @@
         add("deepl");
       }
       return chain;
+    }
+
+    batchItemLimit() {
+      const name = this.settings ? this.resolveEngine(this.settings, null) : null;
+      const engine = name && this.engines[name];
+      return (engine && engine.maxItemsPerRequest) || 25;
     }
 
     resolveEngine(settings, options) {
@@ -759,7 +880,8 @@
         }
         memoryHit.updatedAt = Date.now();
         memoryHit.hits = (memoryHit.hits || 0) + 1;
-        return memoryHit.value;
+        this.touchPersistent(key, memoryHit);
+        return this.repairCachedCase(key, memoryHit);
       }
       if (!this.persistentCache.has(key)) {
         return undefined;
@@ -775,8 +897,17 @@
       }
       persistentHit.updatedAt = Date.now();
       persistentHit.hits = (persistentHit.hits || 0) + 1;
+      this.touchPersistent(key, persistentHit);
       this.memoryCache.set(key, persistentHit);
-      return persistentHit.value;
+      return this.repairCachedCase(key, persistentHit);
+    }
+
+    repairCachedCase(key, entry) {
+      const value = entry.value;
+      if (value === NEGATIVE_CACHE_SENTINEL || !/[A-Z]{3}/.test(value)) return value;
+      const fixed = this.repairShouting(this._keyText(key), value);
+      if (fixed !== value) entry.value = fixed;
+      return fixed;
     }
 
     isWorthPersisting(sourceText, area) {
@@ -790,6 +921,7 @@
       this.seenCounts.set(text, seen);
       if (seen >= 2) return true;
       if (this.EPHEMERAL_AREAS.has(area)) return false;
+      if (area === "captions") return true;
       return text.length <= this.IMPORTANT_MAX_LEN;
     }
 
@@ -829,8 +961,17 @@
       this.persistBytes += bytes;
       this.memoryCache.set(key, entry);
       this.persistentCache.set(key, entry);
+      if (isNegative) return;
+      this.sessionLog.set(key, entry);
+      this.logDirty = true;
       this.persistDirty += 1;
       this.schedulePersist();
+    }
+
+    touchPersistent(key, entry) {
+      if (entry.value === NEGATIVE_CACHE_SENTINEL || this.persistentCache.get(key) !== entry) return;
+      this.sessionLog.set(key, entry);
+      this.logDirty = true;
     }
 
     storeNegativeCache(key) {
@@ -838,34 +979,9 @@
     }
 
     prunePersistentCache() {
-      const now = Date.now();
-      this.persistentCache.forEach((entry, key) => {
-        if (!entry || (entry.expiresAt && entry.expiresAt <= now)) {
-          this.persistBytes -= this._entryBytes(key, entry && entry.value);
-          this.persistentCache.delete(key);
-        }
-      });
+      if (!ROOT.CacheStore) return;
       const cacheSettings = (this.settings && this.settings.cache) || {};
-      const maxBytes = Number.isFinite(cacheSettings.maxBytes) && cacheSettings.maxBytes > 64 * 1024
-        ? cacheSettings.maxBytes
-        : 4 * 1024 * 1024;
-      if (this.persistBytes <= maxBytes) return;
-      let totalBytes = 0;
-      this.persistentCache.forEach((entry, key) => {
-        totalBytes += this._entryBytes(key, entry && entry.value);
-      });
-      this.persistBytes = totalBytes;
-      if (totalBytes <= maxBytes) return;
-      const HIT_WEIGHT_MS = 30 * 60 * 1000;
-      const score = (entry) => (entry.updatedAt || 0) + (entry.hits || 0) * HIT_WEIGHT_MS;
-      const sorted = Array.from(this.persistentCache.entries()).sort((a, b) => score(a[1]) - score(b[1]));
-      const target = maxBytes * 0.8;
-      for (const [key, entry] of sorted) {
-        if (totalBytes <= target) break;
-        totalBytes -= this._entryBytes(key, entry.value);
-        this.persistentCache.delete(key);
-      }
-      this.persistBytes = totalBytes;
+      this.persistBytes = ROOT.CacheStore.prune(this.persistentCache, cacheSettings.maxBytes);
     }
 
     schedulePersist() {
@@ -874,23 +990,8 @@
       }
       this.persistTimer = setTimeout(() => {
         this.persistTimer = null;
-        const write = () => {
-          if (this.persistDirty < this.PERSIST_MIN_DIRTY) return;
-          this.persistDirty = 0;
-          this.prunePersistentCache();
-          const entries = {};
-          this.persistentCache.forEach((value, key) => {
-            entries[key] = value;
-          });
-          void storageLocalSet({
-            [PERSISTENT_CACHE_KEY]: { version: 2, updatedAt: Date.now(), entries },
-          });
-        };
-        if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(write, { timeout: 4000 });
-        } else {
-          write();
-        }
+        if (this.persistDirty < this.PERSIST_MIN_DIRTY) return;
+        this.writeSessionLog();
       }, this.PERSIST_DEBOUNCE_MS);
     }
 
@@ -899,31 +1000,31 @@
         clearTimeout(this.persistTimer);
         this.persistTimer = null;
       }
-      if (!this.persistDirty) return;
+      if (this.logDirty) this.writeSessionLog();
+    }
+
+    writeSessionLog() {
       this.persistDirty = 0;
-      const entries = {};
-      this.persistentCache.forEach((value, key) => {
-        entries[key] = value;
-      });
-      void storageLocalSet({
-        [PERSISTENT_CACHE_KEY]: { version: 2, updatedAt: Date.now(), entries },
-      });
+      this.logDirty = false;
+      if (!this.sessionLog.size || !this.settings?.cache?.enabled || !ROOT.CacheStore) return;
+      const key = `${ROOT.CacheStore.LOG_PREFIX}${this.logSession}-${this.logSeq}`;
+      const text = ROOT.CacheStore.encodeRows(this.sessionLog);
+      void storageLocalSet({ [key]: text });
+      if (text.length > CACHE_LOG_ROLL_CHARS) {
+        this.logSeq += 1;
+        this.sessionLog.clear();
+        requestCacheCompaction();
+      }
+      if (this.persistBytes > (this.settings.cache.maxBytes || 0) * 1.25) this.prunePersistentCache();
     }
 
     async loadPersistentCache() {
-      const data = await storageLocalGet([PERSISTENT_CACHE_KEY]);
-      const blob = data[PERSISTENT_CACHE_KEY];
-      const entries = blob && typeof blob === "object" ? blob.entries : null;
-      if (!entries || typeof entries !== "object") {
-        return;
-      }
-      Object.keys(entries).forEach((key) => {
-        const entry = entries[key];
-        if (!entry || entry.value == null) return;
-        this.persistentCache.set(key, entry);
-        this.persistBytes += this._entryBytes(key, entry.value);
-      });
+      if (!ROOT.CacheStore) return;
+      const { entries, logKeys, legacy } = await ROOT.CacheStore.readAll();
+      this.persistentCache.forEach((entry, key) => entries.set(key, entry));
+      this.persistentCache = entries;
       this.prunePersistentCache();
+      if (legacy || logKeys.length > CACHE_MAX_LOGS) requestCacheCompaction();
     }
 
     settlePendingWork() {
@@ -952,9 +1053,12 @@
       this.persistentCache.clear();
       this.persistBytes = 0;
       this.persistDirty = 0;
+      this.sessionLog.clear();
+      this.logDirty = false;
       this.seenCounts.clear();
       this.pending.clear();
       this.knownOutputs.clear();
+      this.failureBackoff.clear();
       if (this.persistTimer) {
         clearTimeout(this.persistTimer);
         this.persistTimer = null;
@@ -963,7 +1067,7 @@
         clearTimeout(this.singleQueueTimer);
         this.singleQueueTimer = null;
       }
-      await storageLocalRemove([PERSISTENT_CACHE_KEY]);
+      if (ROOT.CacheStore) await ROOT.CacheStore.removeAll();
     }
 
     buildBatches(items, engine) {
@@ -1038,7 +1142,22 @@
         const startedAt = Date.now();
         try {
           subsetOut = await this.callEngine(engineName, subsetTexts, { ...options, priority: options.priority });
-          this.noteEngineResult(engineName, subsetOut.some(Boolean), Date.now() - startedAt);
+          const producedAny = subsetOut.some(Boolean);
+          // All-null without an error means "nothing to translate", which says nothing about the
+          // engine's health, so it must not push the engine into cooldown.
+          if (producedAny || subsetOut.partialFailure) {
+            this.noteEngineResult(engineName, producedAny, Date.now() - startedAt);
+          }
+          if (subsetOut.partialFailure) {
+            // Some of this engine's requests failed: its nulls are errors, so hand them to the
+            // next engine and keep them out of the negative cache.
+            threw = true;
+            threwThisEngine = true;
+            const engine = this.engines[engineName];
+            lastError = new Error((engine && engine.lastError) || "partial failure");
+            lastError.status = 503;
+            lastErrorEngine = engineName;
+          }
         } catch (error) {
           this.noteEngineResult(engineName, false, Date.now() - startedAt);
           threw = true;
@@ -1060,6 +1179,13 @@
           }
         });
         unresolved = nextUnresolved;
+        const engine = this.engines[engineName];
+        // Engines that raise on every real failure (Google) return null only for text that needs
+        // no translation, so asking the next engine about it would just waste a request.
+        if (!threwThisEngine && engine && engine.reportsErrors) {
+          unresolved = [];
+          break;
+        }
         if (!threwThisEngine && produced > 0) {
           unresolved = [];
           break;
@@ -1089,6 +1215,7 @@
         sourceLanguage: options?.sourceLanguage || "auto",
         area: options?.area || "page",
         engine: options?.engine || "",
+        engineOnly: !!options?.engineOnly,
         skipDictionary: !!options?.skipDictionary,
         skipKnownTranslated: options?.skipKnownTranslated !== false,
       };
@@ -1145,8 +1272,10 @@
       if (!normalizedRaw) return this.buildResult(null, null, false);
       const prepared = this.preprocessInputText(normalizedRaw, options && options.targetLanguage);
       if (!prepared) return this.buildResult(null, null, false);
-      const countOnly = this.localizeCountOnly(normalizedRaw, options && options.targetLanguage);
+      const countOnly = this.localAnswer(normalizedRaw, options && options.targetLanguage, options && options.area);
       if (countOnly) return this.buildResult(countOnly, "local", false);
+      const name = this.officialName(normalizedRaw);
+      if (name) return this.buildResult(name, "names", false);
       if (!(options && options.skipDictionary)) {
         const dictHit = this.getDictionaryTranslation(normalizedRaw) || this.getDictionaryTranslation(prepared);
         if (dictHit) {
@@ -1182,8 +1311,22 @@
       return this.enqueueSingleTranslate(text, options);
     }
 
+    isSubFrame() {
+      try {
+        return window.top !== window.self;
+      } catch (_error) {
+        return true;
+      }
+    }
+
+    ensurePersistentCache() {
+      if (!this.persistentLoad) this.persistentLoad = this.loadPersistentCache().catch(() => {});
+      return this.persistentLoad;
+    }
+
     async translateMany(texts, options) {
       await this.initialize();
+      await this.ensurePersistentCache();
       const settings = this.settings;
       const targetLanguage =
         (options && options.targetLanguage) ||
@@ -1207,7 +1350,7 @@
         if (!normalizedRaw) continue;
         const prepared = this.preprocessInputText(normalizedRaw, targetLanguage);
         if (!prepared) continue;
-        const countOnly = this.localizeCountOnly(normalizedRaw, options && options.targetLanguage);
+        const countOnly = this.localAnswer(normalizedRaw, options && options.targetLanguage, options && options.area);
         if (countOnly) {
           results[index] = this.buildResult(countOnly, "local", false);
           if (typeof options?.onPartial === "function") {
@@ -1234,7 +1377,12 @@
             continue;
           }
         }
-        if (this.properNouns) this.properNouns.observe(normalizedRaw);
+        const name = this.officialName(normalizedRaw);
+        if (name) {
+          results[index] = this.buildResult(name, "names", false);
+          if (typeof options?.onPartial === "function") options.onPartial({ source: prepared, translation: name, engine: "names" });
+          continue;
+        }
         if (!primaryEngine) continue;
         let cacheHit = false;
         for (const engineName of engineChain) {
@@ -1260,6 +1408,7 @@
         }
         if (cacheHit) continue;
         const key = this.buildKey(primaryEngine, sourceLanguage, targetLanguage, prepared);
+        if (this.isBackingOff(key)) continue;
         if (this.pending.has(key)) {
           waits.push(
             this.pending.get(key).then((value) => {
@@ -1333,7 +1482,7 @@
           batchError = error;
         }
         const anyTranslated = translatedBatch.some(Boolean);
-        this._recordEngineStatus(primaryEngine, usedEngineBatch, anyTranslated);
+        this._recordEngineStatus(primaryEngine, usedEngineBatch, anyTranslated, batchThrew);
         if (anyTranslated) {
           this._failStreak = 0;
           this.notifyStatus(batchThrew && !batchThrewHard ? "busy" : "ok");
@@ -1348,12 +1497,18 @@
         if (!anyTranslated && batchThrew && batchError) {
           this._warnEngineThrottled(batchErrorEngine || "translation", batchError);
         }
+        const shoutedBatch = this.batchShouted(translatedBatch, batch);
         batch.forEach((item, index) => {
-          const normalized = this.postprocessTranslationText(translatedBatch[index], item.text, options);
+          let raw = translatedBatch[index];
+          if (shoutedBatch && typeof raw === "string") raw = this.repairShouting(item.text, raw, true);
+          const normalized = this.postprocessTranslationText(raw, item.text, options);
           if (normalized) {
             this.storeCache(item.key, normalized, undefined, { area: options && options.area });
+            this.failureBackoff.delete(item.key);
           } else if (!batchThrew) {
             this.storeNegativeCache(item.key);
+          } else {
+            this.noteFailure(item.key);
           }
           const usedEngine = usedEngineBatch[index];
           if (normalized && usedEngine && usedEngine !== primaryEngine) {

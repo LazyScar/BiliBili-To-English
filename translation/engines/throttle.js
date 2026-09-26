@@ -25,7 +25,7 @@
     success(engine) {
       engine.consecutiveFailures = 0;
       if (engine.minIntervalMs > engine.baseIntervalMs) {
-        const step = engine._recoveryStepMs || Math.max(20, Math.round(engine.baseIntervalMs * 0.5));
+        const step = Math.max(engine._recoveryStepMs || 20, Math.round(engine.minIntervalMs * 0.25));
         engine.minIntervalMs = Math.max(engine.baseIntervalMs, engine.minIntervalMs - step);
       }
     },
@@ -96,6 +96,36 @@
     },
   };
 
+  // A failed group comes back as nulls with partialFailure set; only all groups failing throws.
+  ROOT.runEngineGroups = async function runEngineGroups(groups, runGroup) {
+    const output = [];
+    let failed = 0;
+    let lastError = null;
+    for (const group of groups) {
+      try {
+        const translated = await runGroup(group);
+        for (let i = 0; i < group.length; i += 1) {
+          output.push(Array.isArray(translated) && translated[i] ? translated[i] : null);
+        }
+      } catch (error) {
+        failed += 1;
+        lastError = error;
+        for (let i = 0; i < group.length; i += 1) output.push(null);
+      }
+    }
+    if (failed && failed === groups.length) throw lastError;
+    if (failed) output.partialFailure = true;
+    return output;
+  };
+
+  ROOT.fromSettledResults = function fromSettledResults(settled) {
+    const output = settled.map((result) => (result.status === "fulfilled" ? result.value || null : null));
+    const rejected = settled.filter((result) => result.status === "rejected");
+    if (rejected.length && rejected.length === settled.length) throw rejected[0].reason;
+    if (rejected.length) output.partialFailure = true;
+    return output;
+  };
+
   ROOT.RateGovernor = RateGovernor;
-  ROOT.SchedulePriority = { CAPTION: 100, VISIBLE: 20, NEAR: 10, DEFAULT: 0 };
+  ROOT.SchedulePriority = { CAPTION_URGENT: 110, CAPTION: 100, VISIBLE: 20, NEAR: 10, DEFAULT: 0 };
 })();

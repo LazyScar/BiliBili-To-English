@@ -51,21 +51,38 @@
     "[role='option']",
   ];
   const CAPTION_PRIORITY_AHEAD_SECONDS = 30;
-  const CAPTION_PRIORITY_BEHIND_SECONDS = 8;
+  const CAPTION_PRIORITY_BEHIND_SECONDS = 2;
   const CAPTION_IMMEDIATE_MAX_LINES = 12;
   const CAPTION_BOOTSTRAP_LINES = 8;
-  const CAPTION_CRITICAL_LINES = 6;
-  const CAPTION_WINDOW_PREFETCH_LINES = 20;
-  const CAPTION_WINDOW_AHEAD_SECONDS = 45;
-  const CAPTION_WINDOW_BEHIND_SECONDS = 20;
-  const CAPTION_FUTURE_PREFETCH_AHEAD_SECONDS = 60;
-  const CAPTION_FUTURE_PREFETCH_MAX_LINES = 24;
+  // Subtitle buffer: refilled below the low watermark up to the high one, in watching seconds.
+  const CAPTION_AHEAD_WATCH_SECONDS = 50;
+  const CAPTION_BUFFER_LOW_MIN_WATCH_SECONDS = 12;
+  const CAPTION_BUFFER_LOW_MAX_WATCH_SECONDS = 25;
+  const CAPTION_REFILL_MAX_LINES = 40;
+  const CAPTION_URGENT_WATCH_SECONDS = 3;
+  const CAPTION_FAILED_SKIP_MS = 5000;
+  const CAPTION_TRACK_BODY_CACHE = 12;
+  const CAPTION_HEDGE_MIN_MS = 500;
+  const CAPTION_HEDGE_MAX_MS = 3000;
+  const CAPTION_HOVER_DWELL_MS = 150;
+  const CAPTION_HOVER_MIN_GAP_MS = 700;
+  const CAPTION_HOVER_LINES = 6;
+  const CAPTION_PROGRESS_SELECTOR = [
+    ".bpx-player-progress-wrap",
+    ".bpx-player-progress",
+    ".bpx-player-progress-area",
+    ".squirtle-progress-wrap",
+    ".bilibili-player-video-progress",
+  ].join(",");
+  const CAPTION_AHEAD_MIN_SECONDS = 30;
+  const CAPTION_AHEAD_MAX_SECONDS = 120;
+  const CAPTION_AHEAD_PAUSED_SECONDS = 15;
   const CAPTION_ACTIVE_MATCH_TOLERANCE_SECONDS = 0.9;
   const CAPTION_PREFETCH_RETRY_MS = 150;
+  const CAPTION_EMPTY_RETRY_MS = 5000;
+  const CAPTION_EMPTY_RETRY_MAX_MS = 60000;
   const CAPTION_PREFETCH_GRACE_MS = 120;
-  const CAPTION_LOOKAHEAD_UNITS = 3;
-  const CAPTION_URGENT_LEAD_SECONDS = 8;
-  const CAPTION_MIN_BATCH_LINES = 4;
+  const CAPTION_FETCH_TIMEOUT_MS = 8000;
   const CAPTION_EXTRA_TRACK_LIMIT = 4;
   const CAPTION_SENTENCE_MAX_LINES = 4;
   const CAPTION_SENTENCE_MAX_CHARS = 60;
@@ -77,10 +94,16 @@
   const CAPTION_AUTO_TRACK_PATTERN = /(ai|auto|machine|translated|translation)/i;
 
   const CAPTION_SELECTOR = CAPTION_SELECTORS.join(",");
+  const CAPTION_ROOT_SELECTOR =
+    ".bpx-player-subtitle-wrap, .bpx-player-subtitle-panel, " +
+    ".bilibili-player-video-subtitle, [class*='subtitle-wrap'], [class*='subtitle-panel']";
+  const CAPTION_SCOPE_SELECTOR = `${CAPTION_SELECTOR},${CAPTION_ROOT_SELECTOR}`;
+  const CAPTION_FULL_SCAN_MS = 1000;
   const CAPTION_INTERACTIVE_ANCESTOR_SELECTOR = CAPTION_INTERACTIVE_ANCESTOR_SELECTORS.join(",");
   const CAPTION_INTERACTIVE_DESCENDANT_SELECTOR = CAPTION_INTERACTIVE_DESCENDANT_SELECTORS.join(",");
 
-  const VIDEO_EVENTS = ["loadedmetadata", "play", "seeked", "durationchange"];
+  // "seeking" fires before the video has buffered at the new position.
+  const VIDEO_EVENTS = ["loadedmetadata", "play", "seeking", "seeked", "ratechange", "durationchange"];
 
   function normalizeLine(text) {
     const s = String(text || "");
@@ -94,6 +117,24 @@
       .map((part) => part.replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .join("\n");
+  }
+
+  // Tracking params (spm_id_from, vd_source) don't make it a different video.
+  const VIDEO_PARAMS = ["p", "bvid", "aid", "oid", "cid", "ep_id"];
+  function videoIdentity(href) {
+    if (!href) return "";
+    try {
+      const u = new URL(String(href || ""), location.href);
+      const params = VIDEO_PARAMS.map((name) => `${name}=${u.searchParams.get(name) || ""}`).join("&");
+      return `${u.origin}${u.pathname.replace(/\/+$/, "")}?${params}`;
+    } catch (_error) {
+      return String(href || "");
+    }
+  }
+
+  // Subtitle URLs carry signed query params that differ between requests.
+  function trackPath(url) {
+    return String(url || "").replace(/^https?:/i, "").split("?")[0];
   }
 
   function runtimeMessage(payload) {
@@ -176,19 +217,23 @@
 
   async function fetchJsonOrText(url) {
     const credentials = isCdnUrl(url) ? "omit" : "include";
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), CAPTION_FETCH_TIMEOUT_MS) : null;
     try {
-      const response = await fetch(url, { credentials });
+      const response = await fetch(url, { credentials, signal: controller ? controller.signal : undefined });
       if (response.ok) {
         const type = response.headers.get("content-type") || "";
         const text = await response.text();
         return parseJsonOrRaw(text, type);
       }
     } catch (_error) {
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     try {
       const bg = await runtimeMessage({
         type: "bte:bgFetch",
-        payload: { url, method: "GET", credentials },
+        payload: { url, method: "GET", credentials, timeoutMs: CAPTION_FETCH_TIMEOUT_MS },
       });
       if (bg && bg.ok) {
         return parseJsonOrRaw(bg.text || "", "application/json");
@@ -206,6 +251,8 @@
       this.settings = null;
       this.running = false;
       this.subtitleObserver = null;
+      this.knownCaptionNodes = [];
+      this.lastCaptionScanAt = 0;
       this.subtitlePoll = null;
       this.urlPoll = null;
       this.lastUrl = "";
@@ -217,6 +264,11 @@
       this.elementState = new Map();
       this.stylesInjected = false;
       this.lastPrefetchAttempt = 0;
+      this.pollPrefetch = null;
+      this.cidByVideo = new Map();
+      this.cidPending = new Map();
+      this.probeMiss = { video: "", at: 0, delay: 0 };
+      this.bodyMisses = new Map();
       this.partialRefreshTimer = null;
       this.videoWatchTimer = null;
       this.videoElement = null;
@@ -224,9 +276,34 @@
       this.windowPrefetchInFlight = new Map();
       this.bridgeTracks = new Map();
       this.activeLan = "";
+      this.preferredTrack = null;
+      this.trackBodies = new Map();
+      this.captionMisses = [];
+      this.lastTrackProbeAt = 0;
+      this.lastCaptionSeenAt = 0;
+      this.captionDueUnseenMs = 0;
+      this.visibilityTickAt = 0;
+      this.lastSeekAt = 0;
+      this.captionLatencyMs = 0;
       this.bridgeListenerAttached = false;
       this.handleVideoSignal = this.handleVideoSignal.bind(this);
+      this.handleProgressHover = this.handleProgressHover.bind(this);
+      this.hoverTimer = null;
+      this.lastHoverPrefetchAt = 0;
+      this.hoverBound = false;
       this.handleBridgeMessage = this.handleBridgeMessage.bind(this);
+      ROOT.captionOriginalFor = (element) => this.originalFor(element);
+    }
+
+    // The Chinese line behind a translated subtitle element (for hover-to-compare).
+    originalFor(element) {
+      for (let el = element, depth = 0; el && depth < 3; el = el.parentElement, depth += 1) {
+        const state = this.elementState.get(el);
+        if (state && state.original && state.injected && normalizeLine(el.textContent) !== normalizeLine(state.original)) {
+          return state.original;
+        }
+      }
+      return null;
     }
 
     handleBridgeMessage(event) {
@@ -240,7 +317,14 @@
         const url = typeof track === "string" ? track : track.url;
         if (!url || typeof url !== "string") return;
         if (!/(\.hdslb\.com|\.bilivideo\.com)/i.test(url)) return;
-        if (this.bridgeTracks.has(url)) return;
+        const known = this.bridgeTracks.get(url);
+        if (known) {
+          if (!known.lan && track && track.lan) {
+            known.lan = track.lan;
+            known.lanDoc = track.lanDoc || known.lanDoc;
+          }
+          return;
+        }
         this.bridgeTracks.set(url, {
           subtitleUrl: url,
           lan: (track && track.lan) || "",
@@ -249,14 +333,42 @@
         });
         added = true;
       };
-      if (data.kind === "subtitleUrl") {
+      if (data.kind === "subtitleBody") {
+        const url = data.data && data.data.url;
+        if (!url || !/(\.hdslb\.com|\.bilivideo\.com)/i.test(url)) return;
+        let parsed = null;
+        try {
+          parsed = JSON.parse(String((data.data && data.data.text) || ""));
+        } catch (_error) {
+          return;
+        }
+        const body = this.parseSubtitlePayload(parsed);
+        if (body.length) this.rememberTrackBody(url, body);
+        return;
+      } else if (data.kind === "subtitleUrl") {
         consider(data.data && data.data.url);
+      } else if (data.kind === "subtitleFetched") {
+        const url = data.data && data.data.url;
+        consider(url);
+        const lan = data.data && data.data.activeLan ? String(data.data.activeLan) : "";
+        if (lan) this.activeLan = lan;
+        const video = videoIdentity(href);
+        const prev = this.preferredTrack;
+        if (url && (!prev || prev.video !== video || trackPath(prev.url) !== trackPath(url))) {
+          this.preferredTrack = { url, lan, video, at: Date.now() };
+          added = true;
+        }
       } else if (data.kind === "tracks") {
         const tracks = (data.data && data.data.tracks) || [];
         if (Array.isArray(tracks)) tracks.forEach(consider);
         const activeLan = data.data && data.data.activeLan;
         if (activeLan && activeLan !== this.activeLan) {
           this.activeLan = String(activeLan);
+          const video = videoIdentity(href);
+          const prev = this.preferredTrack;
+          if (!prev || prev.video !== video || (prev.lan && prev.lan !== this.activeLan) || !prev.lan) {
+            this.preferredTrack = { url: "", lan: this.activeLan, video, at: Date.now() };
+          }
           added = true;
         }
       } else {
@@ -268,13 +380,77 @@
     }
 
     getBridgeTracks() {
-      const here = location.href;
+      const here = videoIdentity(location.href);
       const out = [];
       this.bridgeTracks.forEach((track) => {
-        if (track.href && track.href !== here) return;
+        if (track.href && videoIdentity(track.href) !== here) return;
         out.push({ lan: track.lan, lanDoc: track.lanDoc, subtitleUrl: track.subtitleUrl });
       });
       return out;
+    }
+
+    currentPreferredTrack() {
+      const pref = this.preferredTrack;
+      return pref && pref.video === videoIdentity(location.href) ? pref : null;
+    }
+
+    pickTrack(ranked) {
+      if (!ranked.length) return null;
+      const pref = this.currentPreferredTrack();
+      if (pref && pref.url) {
+        const match = ranked.find((t) => trackPath(t.subtitleUrl) === trackPath(pref.url));
+        if (match) return match;
+      }
+      const lan = (pref && pref.lan) || this.activeLan;
+      if (lan) {
+        const match = ranked.find((t) => t.lan === lan);
+        if (match) return match;
+      }
+      return ranked[0];
+    }
+
+    currentTrackKey() {
+      const tracks = this.getBridgeTracks();
+      if (tracks.length) {
+        const picked = this.pickTrack(this.rankSubtitleTracks(tracks));
+        if (picked) return trackPath(picked.subtitleUrl);
+      }
+      const pref = this.currentPreferredTrack();
+      if (pref) return pref.url ? trackPath(pref.url) : `lan:${pref.lan}`;
+      return "auto";
+    }
+
+    noteCaptionMiss(line) {
+      const payload = this.currentSubtitleData;
+      if (!payload || !(payload.sourceSet instanceof Set) || !Array.isArray(payload.timed) || !payload.timed.length) return;
+      const comparable = this.extractComparableCaptionText(line);
+      if (!comparable || !this.containsCjkText(comparable)) return;
+      if (payload.sourceSet.has(line) || payload.sourceSet.has(comparable)) return;
+      const nowMs = Date.now();
+      const last = this.captionMisses[this.captionMisses.length - 1];
+      if (last && last.line === comparable) return;
+      this.captionMisses = this.captionMisses.filter((miss) => nowMs - miss.at < 10000);
+      this.captionMisses.push({ line: comparable, at: nowMs });
+      if (this.captionMisses.length < 2 || nowMs - this.lastTrackProbeAt < 5000) return;
+      this.lastTrackProbeAt = nowMs;
+      this.requestBridgeSubtitles();
+      void this.findTrackForLine(comparable).catch(() => {});
+    }
+
+    async findTrackForLine(line) {
+      const current = this.currentSubtitleData;
+      const video = videoIdentity(location.href);
+      for (const track of this.getBridgeTracks()) {
+        if (current && current.trackKey === trackPath(track.subtitleUrl)) continue;
+        const body = await this.fetchSubtitleBody(track.subtitleUrl);
+        if (videoIdentity(location.href) !== video) return;
+        if (body.some((entry) => normalizeLine(entry.content) === line)) {
+          this.preferredTrack = { url: track.subtitleUrl, lan: track.lan || "", video, at: Date.now() };
+          this.captionMisses = [];
+          this.prefetchCurrentVideo(false).catch(() => {});
+          return;
+        }
+      }
     }
 
     requestBridgeSubtitles() {
@@ -315,15 +491,38 @@
       }
       const langChanged = prev && prev.targetLanguage !== nextSettings.targetLanguage;
       const engineChanged = prev && prev.engine !== nextSettings.engine;
-      if (this.lastUrl !== location.href || langChanged || engineChanged) {
+      const sameVideo = videoIdentity(this.lastUrl) === videoIdentity(location.href);
+      if (!sameVideo || langChanged || engineChanged) {
+        const previous = sameVideo ? this.currentSubtitleData : null;
         this.lastUrl = location.href;
         this.clearVideoCaches();
         this.restoreOriginalCaptions();
+        if (previous) this.reuseSubtitles(previous);
       }
       this.start();
       this.bindVideoSignals();
       this.prefetchCurrentVideo(false);
       this.applyToActiveSubtitleNodes();
+    }
+
+    reuseSubtitles(previous) {
+      if (!previous || !previous.context || !Array.isArray(previous.timed) || !previous.timed.length) return;
+      const cacheKey = this.buildVideoCacheKey(previous.context);
+      const payload = {
+        context: previous.context,
+        map: new Map(),
+        timed: previous.timed.map((line) => ({ ...line, translated: null })),
+        groups: previous.groups,
+        groupOf: previous.groupOf,
+        sourceSet: previous.sourceSet,
+        trackKey: previous.trackKey,
+        prefetchPhase: "background",
+        createdAt: Date.now(),
+      };
+      this.seedFromCache(payload);
+      this.videoCache.set(cacheKey, payload);
+      this.currentVideoCacheKey = cacheKey;
+      this.currentSubtitleData = payload;
     }
 
     canRun() {
@@ -360,15 +559,28 @@
       this.bindVideoSignals();
       this.prefetchCurrentVideo(true);
       this.startPolling();
+      if (!this.hoverBound) {
+        document.addEventListener("pointermove", this.handleProgressHover, { passive: true, capture: true });
+        this.hoverBound = true;
+      }
     }
 
     stop(options) {
       const restore = !!options?.restore;
       this.running = false;
+      if (this.hoverBound) {
+        document.removeEventListener("pointermove", this.handleProgressHover, { capture: true });
+        this.hoverBound = false;
+      }
+      if (this.hoverTimer) {
+        clearTimeout(this.hoverTimer);
+        this.hoverTimer = null;
+      }
       if (this.subtitleObserver) {
         this.subtitleObserver.disconnect();
         this.subtitleObserver = null;
       }
+      this.knownCaptionNodes = [];
       if (this.subtitlePoll) {
         clearInterval(this.subtitlePoll);
         this.subtitlePoll = null;
@@ -383,7 +595,11 @@
       }
       this.unbindVideoSignals();
       if (this.partialRefreshTimer) {
-        clearTimeout(this.partialRefreshTimer);
+        if (this.partialRefreshIsFrame && typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(this.partialRefreshTimer);
+        } else {
+          clearTimeout(this.partialRefreshTimer);
+        }
         this.partialRefreshTimer = null;
       }
       this.clearVideoCaches();
@@ -394,16 +610,19 @@
 
     clearVideoCaches() {
       this.prefetchInFlight.clear();
+      this.probeMiss = { video: "", at: 0, delay: 0 };
       this.fallbackPending.clear();
       this.videoCache.clear();
       this.currentSubtitleData = null;
       this.currentVideoCacheKey = "";
       this.warnedIssues.clear();
       this.windowPrefetchInFlight.clear();
+      this.captionMisses = [];
+      this.captionDueUnseenMs = 0;
       if (this.bridgeTracks && this.bridgeTracks.size) {
-        const here = location.href;
+        const here = videoIdentity(location.href);
         this.bridgeTracks.forEach((track, url) => {
-          if (track.href && track.href !== here) this.bridgeTracks.delete(url);
+          if (track.href && videoIdentity(track.href) !== here) this.bridgeTracks.delete(url);
         });
       }
     }
@@ -423,7 +642,9 @@
     restoreOriginalCaptions() {
       this.elementState.forEach((state, element) => {
         if (!element || !element.isConnected) return;
-        if (typeof state.original === "string" && state.original.trim()) {
+        // Only undo our own text; the player may already show another line.
+        const showsOurs = state.injected && normalizeLine(element.textContent) === normalizeLine(state.injected);
+        if (showsOurs && typeof state.original === "string" && state.original.trim()) {
           element.textContent = state.original;
         }
         element.classList.remove("bte-caption-blur");
@@ -434,8 +655,53 @@
       this.elementState.clear();
     }
 
-    handleVideoSignal() {
+    handleProgressHover(event) {
+      if (!this.running || !this.currentSubtitleData) return;
+      const target = event.target;
+      const bar = target && target.closest ? target.closest(CAPTION_PROGRESS_SELECTOR) : null;
+      if (this.hoverTimer) {
+        clearTimeout(this.hoverTimer);
+        this.hoverTimer = null;
+      }
+      if (!bar) return;
+      const x = event.clientX;
+      this.hoverTimer = setTimeout(() => {
+        this.hoverTimer = null;
+        this.prefetchAtProgressPoint(bar, x);
+      }, CAPTION_HOVER_DWELL_MS);
+    }
+
+    prefetchAtProgressPoint(bar, clientX) {
+      const payload = this.currentSubtitleData;
+      const cacheKey = this.currentVideoCacheKey;
+      if (!payload || !cacheKey || !this.canRun() || !Array.isArray(payload.timed)) return;
+      if (Date.now() - this.lastHoverPrefetchAt < CAPTION_HOVER_MIN_GAP_MS) return;
+      const video = document.querySelector("video");
+      const rect = bar.getBoundingClientRect();
+      if (!video || !(Number(video.duration) > 0) || !(rect.width > 100)) return;
+      if (this.captionsLookHidden(payload)) return;
+      const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const at = fraction * Number(video.duration);
+      const now = this.playbackState().time;
+      if (at >= now - 2 && at <= now + this.aheadHorizonSeconds(this.playbackState())) return;
+      const lines = [];
+      const timed = payload.timed;
+      for (let i = this.findTimedIndexAt(timed, Math.max(0, at - 1)); i < timed.length && lines.length < CAPTION_HOVER_LINES; i += 1) {
+        if (Number(timed[i].from) > at + 12) break;
+        const line = timed[i].original;
+        if (!lines.includes(line) && !this.isCaptionLineCovered(payload, line)) lines.push(line);
+      }
+      if (!lines.length) return;
+      this.lastHoverPrefetchAt = Date.now();
+      this.translateCaptionLineSet(cacheKey, payload, lines).catch(() => {});
+    }
+
+    handleVideoSignal(event) {
       if (!this.canRun()) return;
+      if (event && (event.type === "seeking" || event.type === "seeked")) {
+        this.lastSeekAt = Date.now();
+        this.captionDueUnseenMs = 0;
+      }
       this.prefetchCurrentVideo(false);
       if (this.currentSubtitleData && this.currentVideoCacheKey) {
         this.ensureBackgroundFullPrefetch(this.currentVideoCacheKey, this.currentSubtitleData);
@@ -471,20 +737,36 @@
       if (!this.subtitlePoll) {
         this.subtitlePoll = setInterval(() => {
           if (!this.canRun()) return;
-          this.applyToActiveSubtitleNodes();
+          if (Date.now() - this.lastCaptionScanAt >= CAPTION_FULL_SCAN_MS) {
+            this.applyToActiveSubtitleNodes();
+          } else {
+            this.applyToKnownCaptionNodes();
+          }
+          this.trackCaptionVisibility();
           if (this.currentSubtitleData && this.currentVideoCacheKey) {
             this.ensureBackgroundFullPrefetch(this.currentVideoCacheKey, this.currentSubtitleData);
             this.enqueueWindowPrefetch(this.currentVideoCacheKey, this.currentSubtitleData);
           }
-          if (!this.currentSubtitleData && Date.now() - this.lastPrefetchAttempt > CAPTION_PREFETCH_RETRY_MS) {
-            this.prefetchCurrentVideo(false);
+          if (
+            !this.currentSubtitleData &&
+            !this.pollPrefetch &&
+            !this.probeBackingOff() &&
+            Date.now() - this.lastPrefetchAttempt > CAPTION_PREFETCH_RETRY_MS
+          ) {
+            this.pollPrefetch = this.prefetchCurrentVideo(false)
+              .catch(() => {})
+              .finally(() => {
+                this.pollPrefetch = null;
+              });
           }
         }, 80);
       }
       if (!this.urlPoll) {
         this.urlPoll = setInterval(() => {
           if (!this.settings?.enabled) return;
-          if (this.lastUrl !== location.href) {
+          if (this.lastUrl !== location.href && videoIdentity(this.lastUrl) === videoIdentity(location.href)) {
+            this.lastUrl = location.href;
+          } else if (this.lastUrl !== location.href) {
             this.lastUrl = location.href;
             this.clearVideoCaches();
             this.restoreOriginalCaptions();
@@ -504,14 +786,28 @@
       if (this.subtitleObserver) {
         this.subtitleObserver.disconnect();
       }
-      this.subtitleObserver = new MutationObserver(() => {
-        if (!this.canRun()) return;
+      // Applied right in the observer callback, so the translated line is painted in the same frame.
+      this.subtitleObserver = new MutationObserver((records) => {
+        if (!this.canRun() || !records.some((record) => this.recordTouchesCaptions(record))) return;
         this.applyToActiveSubtitleNodes();
       });
       this.subtitleObserver.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true,
+        characterData: true,
       });
+    }
+
+    recordTouchesCaptions(record) {
+      const target = record.target;
+      const element = target && target.nodeType === Node.ELEMENT_NODE ? target : target && target.parentElement;
+      if (element && element.closest(CAPTION_SCOPE_SELECTOR)) return true;
+      if (record.type !== "childList") return false;
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        if (node.matches(CAPTION_SCOPE_SELECTOR) || node.querySelector(CAPTION_SCOPE_SELECTOR)) return true;
+      }
+      return false;
     }
 
     extractVideoContext() {
@@ -579,7 +875,9 @@
     }
 
     buildContextKey(context) {
-      return `${context?.bvid || context?.aid || "unknown"}::${context?.cid || "unknown"}::p${context?.pageNumber || 1}`;
+      if (context?.bvid) return `${context.bvid}::p${context?.pageNumber || 1}`;
+      const ep = context?.epId ? `ep${context.epId}::` : "";
+      return `${ep}${context?.aid || "unknown"}::${context?.cid || "unknown"}::p${context?.pageNumber || 1}`;
     }
 
     async firstResolved(inputs, attempt) {
@@ -597,6 +895,27 @@
 
     async ensureContextCid(context) {
       if (!context || context.cid) return context;
+      const videoKey = `${context.bvid || context.aid}:${context.pageNumber || 1}`;
+      let cid = this.cidByVideo.get(videoKey);
+      if (!cid && !this.probeBackingOff()) {
+        if (!this.cidPending.has(videoKey)) {
+          const lookup = this.lookupCid(context).then((found) => {
+            if (found) this.cidByVideo.set(videoKey, found);
+            return found;
+          });
+          this.cidPending.set(videoKey, lookup);
+          lookup.finally(() => this.cidPending.delete(videoKey));
+        }
+        cid = await this.cidPending.get(videoKey);
+      }
+      if (cid) {
+        context.cid = cid;
+        context.key = this.buildContextKey(context);
+      }
+      return context;
+    }
+
+    async lookupCid(context) {
       const candidates = [];
       if (context.bvid) {
         candidates.push(`https://api.bilibili.com/x/player/pagelist?bvid=${encodeURIComponent(context.bvid)}`);
@@ -606,22 +925,18 @@
         candidates.push(`https://api.bilibili.com/x/player/pagelist?aid=${encodeURIComponent(context.aid)}`);
         candidates.push(`https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(context.aid)}`);
       }
-      if (!candidates.length) return context;
+      if (!candidates.length) return null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const cid = await this.firstResolved(candidates, async (url) => {
           const payload = await fetchJsonOrText(url);
           return this.extractCidFromVideoMeta(payload, context.pageNumber) || null;
         });
-        if (cid) {
-          context.cid = cid;
-          context.key = this.buildContextKey(context);
-          return context;
-        }
+        if (cid) return cid;
         if (attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
-      return context;
+      return null;
     }
 
     extractCidFromVideoMeta(payload, pageNumber) {
@@ -775,8 +1090,8 @@
       const bridgeTracks = this.getBridgeTracks();
       if (bridgeTracks.length) {
         const ranked = this.rankSubtitleTracks(bridgeTracks);
-        const active = this.activeLan && ranked.find((t) => t.lan === this.activeLan);
-        return active ? [active] : ranked;
+        const picked = this.pickTrack(ranked);
+        return picked ? [picked] : ranked;
       }
       const playerTracks = this.getPlayerSubtitleTracks();
       if (playerTracks.length) {
@@ -787,6 +1102,7 @@
         const parsed = this.parseSubtitleTracks({ data: { subtitle: { subtitles: embedded } } });
         return this.rankSubtitleTracks(parsed);
       }
+      if (this.probeBackingOff()) return [];
       const probePlan = this.buildProbeUrls(context);
       const probeUrls = probePlan.urls;
       if (!probePlan.hasCid) {
@@ -814,29 +1130,70 @@
         const found = this.parseSubtitleTracks(payload);
         return found.length ? found : null;
       });
+      const video = videoIdentity(location.href);
       if (tracks) {
+        this.probeMiss = { video: "", at: 0, delay: 0 };
         return this.rankSubtitleTracks(tracks);
       }
+      // Most videos have no subtitles: ask again later, not on every poll.
+      const prior = this.probeMiss.video === video ? this.probeMiss.delay : 0;
+      this.probeMiss = {
+        video,
+        at: Date.now(),
+        delay: prior ? Math.min(CAPTION_EMPTY_RETRY_MAX_MS, prior * 2) : CAPTION_EMPTY_RETRY_MS,
+      };
       this.warnOnce("no-subtitle-tracks", "No subtitle tracks for this video.");
       return [];
     }
 
+    probeBackingOff() {
+      const miss = this.probeMiss;
+      return miss.video === videoIdentity(location.href) && Date.now() - miss.at < miss.delay;
+    }
+
+    parseSubtitlePayload(data) {
+      if (!data || typeof data !== "object") return [];
+      const body = Array.isArray(data.body) ? data.body : Array.isArray(data?.data?.body) ? data.data.body : [];
+      return body
+        .map((item) => ({
+          from: Number(item.from || 0),
+          to: Number(item.to || 0),
+          content: String(item.content || "").trim(),
+        }))
+        .filter((item) => item.content);
+    }
+
+    rememberTrackBody(url, body) {
+      const key = trackPath(url);
+      this.trackBodies.delete(key);
+      this.trackBodies.set(key, body);
+      while (this.trackBodies.size > CAPTION_TRACK_BODY_CACHE) {
+        this.trackBodies.delete(this.trackBodies.keys().next().value);
+      }
+    }
+
     async fetchSubtitleBody(subtitleUrl) {
+      const key = trackPath(subtitleUrl);
+      const cached = this.trackBodies.get(key);
+      if (cached && cached.length) return cached;
+      const miss = this.bodyMisses.get(key);
+      if (miss && Date.now() - miss.at < miss.delay) return [];
+      let body = [];
       try {
-        const data = await fetchJsonOrText(subtitleUrl);
-        if (!data || typeof data !== "object") return [];
-        const body = Array.isArray(data.body) ? data.body : Array.isArray(data?.data?.body) ? data.data.body : [];
-        return body
-          .map((item) => ({
-            from: Number(item.from || 0),
-            to: Number(item.to || 0),
-            content: String(item.content || "").trim(),
-          }))
-          .filter((item) => item.content);
+        body = this.parseSubtitlePayload(await fetchJsonOrText(subtitleUrl));
       } catch (error) {
         console.warn("BTE subtitle body fetch failed:", subtitleUrl, error);
-        return [];
       }
+      if (body.length) {
+        this.bodyMisses.delete(key);
+        this.rememberTrackBody(subtitleUrl, body);
+      } else {
+        this.bodyMisses.set(key, {
+          at: Date.now(),
+          delay: miss ? Math.min(CAPTION_EMPTY_RETRY_MAX_MS, miss.delay * 2) : CAPTION_EMPTY_RETRY_MS,
+        });
+      }
+      return body;
     }
 
     collectUniqueLinesFromBody(body, seen) {
@@ -868,9 +1225,11 @@
     subtitleStoreKey(context) {
       if (!context) return null;
       const page = Number(context.pageNumber) || 1;
-      if (context.bvid) return `bv:${context.bvid}:p${page}`;
-      if (context.aid) return `av:${context.aid}:p${page}`;
-      return context.cid ? `cid:${context.cid}` : null;
+      const track = this.currentTrackKey();
+      if (track === "auto") return null;
+      if (context.bvid) return `bv:${context.bvid}:p${page}:${track}`;
+      if (context.aid) return `av:${context.aid}:p${page}:${track}`;
+      return context.cid ? `cid:${context.cid}:${track}` : null;
     }
 
     async loadStoredSubtitleBody(context) {
@@ -915,7 +1274,57 @@
     buildVideoCacheKey(context) {
       const engine = this.settings?.engine || "google";
       const lang = this.settings?.targetLanguage || "en";
-      return `${context.key}::${engine}::${lang}`;
+      return `${context.key}::${engine}::${lang}::${this.currentTrackKey()}`;
+    }
+
+    urgentPriority() {
+      return (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION_URGENT) || 110;
+    }
+
+    playbackState() {
+      const video = document.querySelector("video");
+      const rate = video && Number(video.playbackRate) > 0 ? Math.min(4, Number(video.playbackRate)) : 1;
+      return {
+        time: video ? Number(video.currentTime || 0) : 0,
+        rate,
+        paused: !video || !!video.paused,
+        hidden: typeof document !== "undefined" && !!document.hidden,
+      };
+    }
+
+    aheadHorizonSeconds(play) {
+      if (play.hidden) return 0;
+      if (play.paused) return CAPTION_AHEAD_PAUSED_SECONDS;
+      const horizon = Math.min(
+        CAPTION_AHEAD_MAX_SECONDS,
+        Math.max(CAPTION_AHEAD_MIN_SECONDS, CAPTION_AHEAD_WATCH_SECONDS * play.rate)
+      );
+      return this.isUsageOptimized() ? Math.min(horizon, 20) : horizon;
+    }
+
+    captionsLookHidden(payload) {
+      if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return false;
+      if (this.lastCaptionSeenAt < (payload.createdAt || 0) - 15000) return true;
+      return this.captionDueUnseenMs > 2500;
+    }
+
+    trackCaptionVisibility() {
+      const nowMs = Date.now();
+      const elapsed = Math.min(500, nowMs - (this.visibilityTickAt || nowMs));
+      this.visibilityTickAt = nowMs;
+      const payload = this.currentSubtitleData;
+      if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return;
+      if (nowMs - this.lastCaptionSeenAt < 300) {
+        this.captionDueUnseenMs = 0;
+        return;
+      }
+      const play = this.playbackState();
+      if (play.paused || play.hidden) return;
+      const index = this.findTimedIndexAt(payload.timed, play.time);
+      const line = payload.timed[index];
+      if (line && Number(line.from) <= play.time && play.time <= Number(line.to)) {
+        this.captionDueUnseenMs = (this.captionDueUnseenMs || 0) + elapsed;
+      }
     }
 
     getVideoCurrentTime() {
@@ -1038,18 +1447,39 @@
 
     distributeUnitTranslation(payload, unit, translation) {
       if (!translation) return 0;
+      // A line keeps its first translation so it never changes while on screen.
+      const setOnce = (line, value) => {
+        if (!payload.map.has(line)) payload.map.set(line, value);
+      };
       if (unit.lines.length < 2) {
-        payload.map.set(unit.lines[0], translation);
+        setOnce(unit.lines[0], translation);
         return 1;
       }
       const pieces = this.splitTranslationAcross(translation, unit.lines);
       if (pieces) {
-        unit.lines.forEach((line, index) => payload.map.set(line, pieces[index]));
+        unit.lines.forEach((line, index) => setOnce(line, pieces[index]));
       } else {
-        unit.lines.forEach((line) => payload.map.set(line, translation));
+        unit.lines.forEach((line) => setOnce(line, translation));
       }
       payload.map.set(unit.text, translation);
       return unit.lines.length;
+    }
+
+    seedFromCache(payload) {
+      const lang = this.settings?.targetLanguage || "en";
+      const seen = new Set();
+      (payload.groups || []).forEach((group) => {
+        if (!group || seen.has(group.text)) return;
+        seen.add(group.text);
+        const hit = this.translationManager.peekCached(group.text, { area: "captions", targetLanguage: lang });
+        if (hit && hit.translation) this.distributeUnitTranslation(payload, { text: group.text, lines: group.lines }, hit.translation);
+      });
+      payload.timed.forEach((entry) => {
+        const line = entry.original;
+        if (!line || payload.map.has(line)) return;
+        const hit = this.translationManager.peekCached(line, { area: "captions", targetLanguage: lang });
+        if (hit && hit.translation) payload.map.set(line, hit.translation);
+      });
     }
 
     selectPriorityLines(timed, uniqueLines) {
@@ -1129,25 +1559,6 @@
       return null;
     }
 
-    collectFuturePrefetchLines(payload, excludedLines) {
-      if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return [];
-      const excluded = excludedLines || new Set();
-      const now = this.getVideoCurrentTime();
-      const out = [];
-      const seen = new Set();
-      payload.timed.forEach((entry) => {
-        if (!entry || !entry.original) return;
-        if (entry.from < now - 2) return;
-        if (entry.from > now + CAPTION_FUTURE_PREFETCH_AHEAD_SECONDS) return;
-        const original = normalizeLine(entry.original);
-        if (!original || seen.has(original) || excluded.has(original)) return;
-        if (payload.map && payload.map.has(original)) return;
-        seen.add(original);
-        out.push(original);
-      });
-      return out.slice(0, CAPTION_FUTURE_PREFETCH_MAX_LINES);
-    }
-
     shouldWaitForPrefetchForLine(line) {
       if (!this.currentSubtitleData || this.currentSubtitleData.prefetchPhase === "complete") return false;
       if (Date.now() - (this.currentSubtitleData.createdAt || 0) > CAPTION_PREFETCH_GRACE_MS) {
@@ -1169,7 +1580,10 @@
 
     schedulePartialRefresh(cacheKey, payload) {
       if (this.partialRefreshTimer) return;
-      this.partialRefreshTimer = setTimeout(() => {
+      const visible = typeof document !== "undefined" && !document.hidden && typeof requestAnimationFrame === "function";
+      const defer = visible ? (fn) => requestAnimationFrame(fn) : (fn) => setTimeout(fn, 40);
+      this.partialRefreshIsFrame = visible;
+      this.partialRefreshTimer = defer(() => {
         this.partialRefreshTimer = null;
         if (this.currentVideoCacheKey !== cacheKey) return;
         payload.timed = payload.timed.map((line) => ({
@@ -1193,57 +1607,66 @@
       return Math.min(lo, timed.length - 1);
     }
 
-    captionLineLead(payload, line, now) {
-      const group = payload?.groupOf?.get(line);
-      const from = group ? Number(group.from) : NaN;
-      return Number.isFinite(from) ? from - now : 0;
+    isCaptionLineCovered(payload, line) {
+      if (!line) return true;
+      if (payload.map.has(line)) return true;
+      if (payload.inflight && payload.inflight.has(line)) return true;
+      const skip = payload.skipUntil && payload.skipUntil.get(line);
+      if (skip && skip > Date.now()) return true;
+      return !this.containsCjkText(line);
     }
 
-    getWindowCandidateLines(payload, focusLine) {
-      if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return [];
-      const out = [];
-      const seen = new Set();
-      const add = (line) => {
-        const normalized = normalizeLine(line);
-        if (!normalized || seen.has(normalized)) return;
-        if (payload.map && payload.map.has(normalized)) return;
-        seen.add(normalized);
-        out.push(normalized);
-      };
-
-      const normalizedFocus = normalizeLine(focusLine || "");
-      if (normalizedFocus) add(normalizedFocus);
-
-      const now = this.getVideoCurrentTime();
+    bufferFrontier(payload, now) {
       const timed = payload.timed;
-      const pivot = this.findTimedIndexAt(timed, now);
-
-      let examined = 0;
-      for (let i = pivot; i < timed.length && out.length < CAPTION_WINDOW_PREFETCH_LINES; i += 1) {
-        if (timed[i].from > now + CAPTION_WINDOW_AHEAD_SECONDS && examined >= CAPTION_LOOKAHEAD_UNITS * 2) {
-          break;
-        }
-        examined += 1;
-        add(timed[i].original);
+      for (let i = this.findTimedIndexAt(timed, now); i < timed.length; i += 1) {
+        const entry = timed[i];
+        if (Number(entry.to) < now) continue;
+        if (this.isCaptionLineCovered(payload, entry.original)) continue;
+        return { index: i, lead: Number(entry.from) - now };
       }
-
-      for (let i = pivot - 1; i >= 0 && out.length < CAPTION_WINDOW_PREFETCH_LINES; i -= 1) {
-        if (timed[i].to < now - CAPTION_WINDOW_BEHIND_SECONDS) break;
-        add(timed[i].original);
-      }
-
-      return out.slice(0, CAPTION_WINDOW_PREFETCH_LINES);
+      return { index: timed.length, lead: Infinity };
     }
 
-    enqueueWindowPrefetch(cacheKey, payload, focusLine) {
-      if (!payload || this.currentVideoCacheKey !== cacheKey) return;
-      if (payload.prefetchPhase === "complete") return;
-      const candidates = this.getWindowCandidateLines(payload, focusLine);
-      if (!candidates.length) return;
+    bufferLowWaterSeconds(play) {
+      const latencyS = (this.captionLatencyMs || 400) / 1000;
+      const watch = Math.min(
+        CAPTION_BUFFER_LOW_MAX_WATCH_SECONDS,
+        Math.max(CAPTION_BUFFER_LOW_MIN_WATCH_SECONDS, latencyS * 4 + 6)
+      );
+      return watch * play.rate;
+    }
+
+    refillCaptionBuffer(cacheKey, payload, options) {
+      if (!payload || !Array.isArray(payload.timed) || !payload.timed.length) return;
+      if (this.currentVideoCacheKey !== cacheKey || !this.canRun()) return;
+      const focusLine = options && options.focusLine ? normalizeLine(options.focusLine) : "";
+      if (focusLine && this.isCaptionLineCovered(payload, focusLine)) return;
+      const force = !!focusLine;
+      const play = this.playbackState();
+      if (!force && (play.hidden || this.captionsLookHidden(payload))) return;
+      const frontier = this.bufferFrontier(payload, play.time);
+      if (frontier.lead === Infinity) return;
+      const high = Math.max(this.aheadHorizonSeconds(play), force ? CAPTION_URGENT_WATCH_SECONDS * play.rate : 0);
+      const low = Math.min(high, this.bufferLowWaterSeconds(play));
+      if (!force && frontier.lead > low) return;
+
+      const timed = payload.timed;
+      const limitTime = play.time + high;
+      const lines = [];
+      const seen = new Set();
+      for (let i = frontier.index; i < timed.length && lines.length < CAPTION_REFILL_MAX_LINES; i += 1) {
+        const entry = timed[i];
+        if (Number(entry.from) > limitTime) break;
+        const line = entry.original;
+        if (seen.has(line) || this.isCaptionLineCovered(payload, line)) continue;
+        seen.add(line);
+        lines.push(line);
+      }
+      if (!lines.length) return;
 
       const uncached = [];
       let hadCacheHit = false;
-      this.resolveSentenceUnits(payload, candidates).forEach((unit) => {
+      this.resolveSentenceUnits(payload, lines).forEach((unit) => {
         const hit = this.translationManager.peekCached(unit.text, {
           area: "captions",
           targetLanguage: this.settings?.targetLanguage || "en",
@@ -1253,81 +1676,113 @@
           hadCacheHit = true;
           return;
         }
-        uncached.push(unit.lines[0]);
+        unit.lines.forEach((line) => uncached.push(line));
       });
-      if (hadCacheHit) {
-        this.schedulePartialRefresh(cacheKey, payload);
-      }
+      if (hadCacheHit) this.schedulePartialRefresh(cacheKey, payload);
       if (!uncached.length) return;
 
-      if (!payload.windowQueue) {
-        payload.windowQueue = new Set();
+      const urgentUntil = play.time + CAPTION_URGENT_WATCH_SECONDS * play.rate;
+      const urgent = [];
+      const rest = [];
+      uncached.forEach((line) => {
+        const from = this.captionLineStart(payload, line);
+        (from <= urgentUntil ? urgent : rest).push(line);
+      });
+      const onFailure = (error) => {
+        this.warnOnce(`caption-batch-${cacheKey}`, "Caption translation batch failed.", error);
+      };
+      if (urgent.length) {
+        this.translateCaptionLineSet(cacheKey, payload, urgent, this.urgentPriority()).catch(onFailure);
       }
-      uncached.forEach((line) => payload.windowQueue.add(line));
+      if (rest.length) {
+        this.translateCaptionLineSet(cacheKey, payload, rest).catch(onFailure);
+      }
+    }
 
-      if (this.windowPrefetchInFlight.has(cacheKey)) return;
+    captionLineStart(payload, line) {
+      const group = payload?.groupOf?.get(line);
+      if (group && Number.isFinite(Number(group.from))) return Number(group.from);
+      const entry = payload.timed.find((item) => item.original === line);
+      return entry ? Number(entry.from) : Infinity;
+    }
 
-      const worker = (async () => {
-        while (
-          payload.windowQueue &&
-          payload.windowQueue.size &&
-          this.currentVideoCacheKey === cacheKey &&
-          this.canRun()
-        ) {
-          const now = this.getVideoCurrentTime();
-          const ranked = [];
-          payload.windowQueue.forEach((line) => {
-            if (payload.map.has(line)) {
-              payload.windowQueue.delete(line);
-              return;
-            }
-            const lead = this.captionLineLead(payload, line, now);
-            if (lead < -CAPTION_WINDOW_BEHIND_SECONDS) {
-              payload.windowQueue.delete(line);
-              return;
-            }
-            ranked.push({ line, rank: lead >= 0 ? lead : 1e6 - lead });
-          });
-          if (!ranked.length) break;
-          ranked.sort((a, b) => a.rank - b.rank);
-          if (ranked[0].rank > CAPTION_URGENT_LEAD_SECONDS && ranked.length < CAPTION_MIN_BATCH_LINES) {
-            break;
-          }
-          const batch = ranked.slice(0, CAPTION_WINDOW_PREFETCH_LINES).map((item) => item.line);
-          batch.forEach((line) => payload.windowQueue.delete(line));
-
-          const units = this.resolveSentenceUnits(payload, batch);
-          const headLines = new Set();
-          if (units.length > CAPTION_LOOKAHEAD_UNITS + 1) {
-            units.slice(0, CAPTION_LOOKAHEAD_UNITS).forEach((unit) => {
-              unit.lines.forEach((line) => headLines.add(line));
-            });
-          } else {
-            batch.forEach((line) => headLines.add(line));
-          }
-          const tail = batch.filter((line) => !headLines.has(line));
-          const headTask = this.translateCaptionLineSet(cacheKey, payload, Array.from(headLines));
-          const tailTask = tail.length
-            ? this.translateCaptionLineSet(cacheKey, payload, tail).catch((error) => {
-                this.warnOnce(`window-prefetch-tail-${cacheKey}`, "Caption prefetch batch failed.", error);
-              })
-            : null;
-          await headTask;
-          if (tailTask) await tailTask;
-        }
-      })()
-        .catch((error) => {
-          this.warnOnce(`window-prefetch-${cacheKey}`, "Caption prefetch loop stopped.", error);
-        })
-        .finally(() => {
-          this.windowPrefetchInFlight.delete(cacheKey);
-        });
-      this.windowPrefetchInFlight.set(cacheKey, worker);
+    enqueueWindowPrefetch(cacheKey, payload, focusLine) {
+      this.refillCaptionBuffer(cacheKey, payload, { focusLine });
     }
 
     ensureBackgroundFullPrefetch() {}
 
-    async translateCaptionLineSet(cacheKey, payload, lines) {
+    async translateCaptionLineSet(cacheKey, payload, lines, priority) {
+      if (!payload || !lines || !lines.length) return;
+      if (!payload.inflight) payload.inflight = new Set();
+      if (!payload.skipUntil) payload.skipUntil = new Map();
+      const units = this.resolveSentenceUnits(payload, lines).filter(
+        (unit) =>
+          !unit.lines.every((line) => payload.map.has(line)) &&
+          !unit.lines.some((line) => payload.inflight.has(line))
+      );
+      if (!units.length) return;
+      const unitLines = [];
+      units.forEach((unit) => unit.lines.forEach((line) => unitLines.push(line)));
+      unitLines.forEach((line) => payload.inflight.add(line));
+      const startedAt = Date.now();
+      try {
+        await this.withHedge(cacheKey, payload, unitLines, priority);
+      } finally {
+        unitLines.forEach((line) => payload.inflight.delete(line));
+        const elapsed = Date.now() - startedAt;
+        if (elapsed > 40) {
+          this.captionLatencySamples = (this.captionLatencySamples || []).concat(elapsed).slice(-9);
+          const sorted = this.captionLatencySamples.slice().sort((a, b) => a - b);
+          this.captionLatencyMs = sorted[Math.floor(sorted.length / 2)];
+        }
+        const retryAt = Date.now() + CAPTION_FAILED_SKIP_MS;
+        unitLines.forEach((line) => {
+          if (!payload.map.has(line)) payload.skipUntil.set(line, retryAt);
+        });
+      }
+    }
+
+    hedgeEngineName() {
+      const tm = this.translationManager;
+      if (!tm || typeof tm.resolveEngineChain !== "function" || !tm.settings) return null;
+      try {
+        const chain = tm.resolveEngineChain(tm.settings, {});
+        return chain.length > 1 ? chain[1] : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    hedgeDelayMs() {
+      return Math.min(CAPTION_HEDGE_MAX_MS, Math.max(CAPTION_HEDGE_MIN_MS, Math.round((this.captionLatencyMs || 400) * 2)));
+    }
+
+    // If an on-screen line is slow, also ask the next engine; the first answer wins.
+    withHedge(cacheKey, payload, lines, priority) {
+      const main = this.translateCaptionUnits(cacheKey, payload, lines, priority);
+      const hedgeEngine = (priority || 0) >= this.urgentPriority() ? this.hedgeEngineName() : null;
+      if (!hedgeEngine) return main;
+      let timer = null;
+      const hedge = new Promise((resolve) => {
+        timer = setTimeout(resolve, this.hedgeDelayMs());
+      }).then(() => {
+        const missing = lines.filter((line) => !payload.map.has(line));
+        if (!missing.length || this.currentVideoCacheKey !== cacheKey) return;
+        this.hedgesSent = (this.hedgesSent || 0) + 1;
+        return this.translateCaptionUnits(cacheKey, payload, missing, priority, hedgeEngine);
+      });
+      main.then(() => clearTimeout(timer), () => {});
+      hedge.catch(() => {});
+      return Promise.race([
+        main,
+        hedge.then(() => (lines.every((line) => payload.map.has(line)) ? undefined : main), () => main),
+      ]);
+    }
+
+    async translateCaptionUnits(cacheKey, payload, lines, priority, engine) {
+      const engineOptions = engine ? { engine, engineOnly: true } : {};
+      const requestPriority = priority || ((ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100);
       if (!lines.length) return;
       const units = this.resolveSentenceUnits(payload, lines).filter(
         (unit) => !unit.lines.every((line) => payload?.map && payload.map.has(line))
@@ -1351,7 +1806,8 @@
         targetLanguage: this.settings.targetLanguage,
         sourceLanguage: "zh-CN",
         skipKnownTranslated: false,
-        priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
+        priority: requestPriority,
+        ...engineOptions,
         onPartial: ({ source, translation }) => {
           if (!translation || this.currentVideoCacheKey !== cacheKey) return;
           const normalizedSource = normalizeLine(source);
@@ -1392,7 +1848,8 @@
             targetLanguage: this.settings.targetLanguage,
             sourceLanguage: "zh-CN",
             skipKnownTranslated: false,
-            priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
+            priority: requestPriority,
+            ...engineOptions,
           });
           singles.forEach((line, index) => {
             const translation = retry[index]?.translation || null;
@@ -1414,6 +1871,7 @@
     async prefetchCurrentVideo(forceRefresh) {
       if (!this.settings?.enabled || !this.settings?.areas?.captions) return;
       if (!this.isVideoRoute()) return;
+      this.lastPrefetchAttempt = Date.now();
       let context = this.extractVideoContext();
       if (!context.cid && !context.bvid && !context.aid) {
         this.warnOnce("missing-video-context", "Video context is missing; subtitle prefetch will retry.");
@@ -1421,7 +1879,7 @@
         return;
       }
       const storedBody = await this.loadStoredSubtitleBody(context);
-      if (!storedBody) {
+      if (!storedBody && !(context.bvid && this.getBridgeTracks().length)) {
         context = await this.ensureContextCid(context);
       }
       const cacheKey = this.buildVideoCacheKey(context);
@@ -1457,7 +1915,7 @@
         return;
       }
 
-      const taskStartHref = location.href;
+      const taskStartVideo = videoIdentity(location.href);
       const task = (async () => {
         let primaryBody = storedBody;
         if (!primaryBody) {
@@ -1494,15 +1952,17 @@
           groups,
           groupOf,
           sourceSet: seen,
+          trackKey: this.currentTrackKey(),
           prefetchPhase: "initial",
           createdAt: Date.now(),
         };
         if (!this.running || !this.settings?.enabled || !this.settings?.areas?.captions || !this.isVideoRoute()) {
           return;
         }
-        if (location.href !== taskStartHref) {
+        if (videoIdentity(location.href) !== taskStartVideo) {
           return;
         }
+        this.seedFromCache(payload);
         this.videoCache.set(cacheKey, payload);
         this.currentVideoCacheKey = cacheKey;
         this.currentSubtitleData = payload;
@@ -1510,13 +1970,9 @@
 
         const { preferred: priorityLines } = this.selectPriorityLines(timed, uniqueLines);
 
-        const criticalLines = priorityLines.slice(0, CAPTION_CRITICAL_LINES);
-        const nearLines = priorityLines.slice(CAPTION_CRITICAL_LINES);
+        const criticalLines = priorityLines;
 
-        const criticalTask = this.translateCaptionLineSet(cacheKey, payload, criticalLines);
-        if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
-          void this.translateCaptionLineSet(cacheKey, payload, nearLines).catch(() => {});
-        }
+        const criticalTask = this.translateCaptionLineSet(cacheKey, payload, criticalLines, this.urgentPriority());
         await criticalTask;
         if (this.currentVideoCacheKey === cacheKey) {
           payload.prefetchPhase = "background";
@@ -1527,16 +1983,7 @@
         void (async () => {
           payload.prefetchSequenceRunning = true;
           try {
-            if (nearLines.length && this.currentVideoCacheKey === cacheKey) {
-              await this.translateCaptionLineSet(cacheKey, payload, nearLines);
-            }
-            if (!this.isUsageOptimized() && this.currentVideoCacheKey === cacheKey) {
-              const excluded = new Set([...priorityLines]);
-              const futureChunk = this.collectFuturePrefetchLines(payload, excluded);
-              if (futureChunk.length) {
-                await this.translateCaptionLineSet(cacheKey, payload, futureChunk);
-              }
-            }
+            if (this.currentVideoCacheKey === cacheKey) this.enqueueWindowPrefetch(cacheKey, payload);
           } catch (error) {
             this.warnOnce(`prefetch-sequence-failed-${cacheKey}`, "Caption prefetch sequence failed.", error);
           } finally {
@@ -1651,8 +2098,13 @@
       ) {
         return;
       }
-      if (this.currentSubtitleData && this.currentVideoCacheKey) {
-        this.enqueueWindowPrefetch(this.currentVideoCacheKey, this.currentSubtitleData, normalized);
+      const payload = this.currentSubtitleData;
+      if (payload && this.currentVideoCacheKey && payload.sourceSet instanceof Set && payload.sourceSet.has(normalized)) {
+        this.refillCaptionBuffer(this.currentVideoCacheKey, payload, { focusLine: normalized });
+        return;
+      }
+      if (payload && this.currentVideoCacheKey) {
+        this.enqueueWindowPrefetch(this.currentVideoCacheKey, payload, normalized);
         if (this.resolveTranslationForLine(normalized)) return;
       }
       const key = `${this.settings?.targetLanguage || "en"}::${normalized}`;
@@ -1673,7 +2125,7 @@
           targetLanguage: this.settings?.targetLanguage || "en",
           sourceLanguage: "zh-CN",
           skipKnownTranslated: false,
-          priority: (ROOT.SchedulePriority && ROOT.SchedulePriority.CAPTION) || 100,
+          priority: this.urgentPriority(),
           onPartial: ({ source, translation }) => {
             if (!translation || !this.currentSubtitleData) return;
             const normalizedSource = normalizeLine(source);
@@ -1832,6 +2284,7 @@
       const normalizedSource = normalizeLine(sourceText);
       const live = String(element.textContent || "").trim();
       if (!live) return;
+      this.lastCaptionSeenAt = Date.now();
 
       if (state.injected && live === state.injected && state.original) {
       } else {
@@ -1840,6 +2293,7 @@
       }
 
       let translated = this.resolveTranslationForLine(state.original);
+      if (!translated) this.noteCaptionMiss(state.original);
       if (!translated) {
         const quick = this.translationManager.peekCached(state.original, {
           area: "captions",
@@ -1907,23 +2361,38 @@
     applyToActiveSubtitleNodes() {
       if (!this.canRun()) return;
       const nodes = this.getCandidateCaptionNodes();
+      this.knownCaptionNodes = nodes;
+      this.lastCaptionScanAt = Date.now();
       nodes.forEach((node) => this.applyToCaptionElement(node));
+      this.applyPasses = (this.applyPasses || 0) + 1;
+      if (this.applyPasses % 200 === 0 && this.elementState.size > 50) {
+        this.elementState.forEach((_state, element) => {
+          if (!element || !element.isConnected) this.elementState.delete(element);
+        });
+      }
+    }
+
+    applyToKnownCaptionNodes() {
+      if (!this.canRun()) return;
+      this.knownCaptionNodes.forEach((node) => {
+        if (this.isCaptionCandidate(node)) this.applyToCaptionElement(node);
+      });
+    }
+
+    isCaptionCandidate(node) {
+      if (!this.isSafeCaptionTextElement(node)) return false;
+      const text = normalizeLine(this.extractCaptionSourceText(node));
+      return !!text && text.length <= 220;
     }
 
     getCandidateCaptionNodes() {
       const nodes = new Set();
       const addIfSafe = (node) => {
-        if (!this.isSafeCaptionTextElement(node)) return;
-        const text = normalizeLine(this.extractCaptionSourceText(node));
-        if (!text || text.length > 220) return;
-        nodes.add(node);
+        if (this.isCaptionCandidate(node)) nodes.add(node);
       };
       document.querySelectorAll(CAPTION_SELECTOR).forEach(addIfSafe);
       if (nodes.size === 0) {
-        const subtitleRoot = document.querySelector(
-          ".bpx-player-subtitle-wrap, .bpx-player-subtitle-panel, " +
-          ".bilibili-player-video-subtitle, [class*='subtitle-wrap'], [class*='subtitle-panel']"
-        );
+        const subtitleRoot = document.querySelector(CAPTION_ROOT_SELECTOR);
         if (subtitleRoot) {
           const walker = document.createTreeWalker(subtitleRoot, NodeFilter.SHOW_TEXT);
           let textNode;

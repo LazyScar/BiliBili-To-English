@@ -107,9 +107,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     papago:
       '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#08cf5d"/><path d="M6 6.8h12a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6h-5.2l-3.6 2.7v-2.7H6a1.6 1.6 0 0 1-1.6-1.6V8.4A1.6 1.6 0 0 1 6 6.8Z" fill="#fff"/><circle cx="9.3" cy="11.1" r="1.05" fill="#08cf5d"/><circle cx="12" cy="11.1" r="1.05" fill="#08cf5d"/><circle cx="14.7" cy="11.1" r="1.05" fill="#08cf5d"/></svg>',
   };
+  function setIcon(el, markup) {
+    if (!el) return;
+    const value = String(markup || "");
+    if (!value.trim().startsWith("<svg")) {
+      el.textContent = value;
+      return;
+    }
+    const source = /\sxmlns=/.test(value) ? value : value.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    const doc = new DOMParser().parseFromString(source, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (!svg || svg.nodeName.toLowerCase() !== "svg") {
+      el.textContent = "";
+      return;
+    }
+    el.replaceChildren(document.importNode(svg, true));
+  }
+
   function setEngineIcon(engine) {
     if (!els.engineIcon) return;
-    els.engineIcon.innerHTML = ENGINE_ICONS[engine] || ENGINE_ICONS.google;
+    setIcon(els.engineIcon, ENGINE_ICONS[engine] || ENGINE_ICONS.google);
   }
 
   const ENGINE_I18N_KEY = {
@@ -126,7 +143,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const openDropdowns = [];
   const dropdownSelectRefs = {};
   document.addEventListener("click", () => openDropdowns.forEach((d) => d.close()));
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") openDropdowns.forEach((d) => d.close()); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const hadDropdown = !!document.querySelector(".icon-dd.open");
+    openDropdowns.forEach((d) => d.close());
+    if (hadDropdown) return;
+    const modal = document.getElementById("errModal");
+    if (modal && modal.classList.contains("open")) {
+      modal.classList.remove("open");
+      return;
+    }
+    const panel = document.querySelector(".view-panel.open");
+    if (panel) {
+      panel.classList.remove("open");
+      event.preventDefault();
+    }
+  });
 
   function createIconDropdown(ids, items, onSelect) {
     const dd = document.getElementById(ids.dd);
@@ -147,10 +179,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const li = document.createElement("li");
       li.className = "icon-dd-item";
       li.setAttribute("role", "option");
+      li.tabIndex = -1;
       li.dataset.value = item.value;
       const ic = document.createElement("span");
       ic.className = "icon-dd-ic";
-      ic.innerHTML = item.iconHtml || "";
+      setIcon(ic, item.iconHtml);
       const lbl = document.createElement("span");
       lbl.className = "icon-dd-lbl";
       lbl.textContent = item.label;
@@ -166,6 +199,32 @@ document.addEventListener("DOMContentLoaded", async () => {
         event.stopPropagation();
         close();
         onSelectRef.fn(li.dataset.value);
+        btn.focus();
+      });
+      list.addEventListener("keydown", (event) => {
+        const options = Array.from(list.querySelectorAll(".icon-dd-item"));
+        const index = options.indexOf(document.activeElement);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          const next = options[(index + step + options.length) % options.length];
+          if (next) next.focus();
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          const next = event.key === "Home" ? options[0] : options[options.length - 1];
+          if (next) next.focus();
+        } else if ((event.key === "Enter" || event.key === " ") && index >= 0) {
+          event.preventDefault();
+          close();
+          onSelectRef.fn(options[index].dataset.value);
+          btn.focus();
+        } else if (event.key === "Escape" || event.key === "Tab") {
+          close();
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            btn.focus();
+          }
+        }
       });
     }
     onSelectRef.fn = onSelect;
@@ -175,7 +234,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         event.stopPropagation();
         const wasOpen = dd.classList.contains("open");
         openDropdowns.forEach((d) => d.close());
-        if (!wasOpen) { dd.classList.add("open"); btn.setAttribute("aria-expanded", "true"); }
+        if (!wasOpen) {
+          dd.classList.add("open");
+          btn.setAttribute("aria-expanded", "true");
+          if (event.detail === 0) {
+            const current = list.querySelector(".icon-dd-item.active") || list.querySelector(".icon-dd-item");
+            if (current) current.focus();
+          }
+        }
+      });
+      btn.addEventListener("keydown", (event) => {
+        if ((event.key === "ArrowDown" || event.key === "ArrowUp") && !dd.classList.contains("open")) {
+          event.preventDefault();
+          btn.click();
+          const current = list.querySelector(".icon-dd-item.active") || list.querySelector(".icon-dd-item");
+          if (current) current.focus();
+        }
       });
     }
     return {
@@ -183,7 +257,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       setValue(value) {
         const item = items.find((x) => x.value === value) || items[0];
         if (!item) return;
-        if (iconEl) iconEl.innerHTML = item.iconHtml || "";
+        if (iconEl) setIcon(iconEl, item.iconHtml);
         if (nameEl) nameEl.textContent = item.label;
         list.querySelectorAll(".icon-dd-item").forEach((li) => {
           const on = li.dataset.value === value;
@@ -317,21 +391,65 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   function maybeReportError(status) {
     if (!status || status.ok !== false) return;
+    // Only report a failure that is still current; a single failed batch minutes ago says
+    // nothing about the engine now and used to pop this dialog on every popup open.
+    if (!status.at || Date.now() - status.at > 2 * 60 * 1000) return;
     const signature = `${status.selected}:${status.reason}`;
     if (signature === shownErrorSignature) return;
     shownErrorSignature = signature;
     const name = engineName(status.selected) || "Translation";
+    const autoBtn = document.getElementById("errModalAuto");
+    const onAuto = ((settings && settings.engine) || "auto") === "auto";
+    if (autoBtn) autoBtn.style.display = onAuto ? "none" : "";
     showErrorModal(
       I18N.errTitle || "Translation problem",
       `${name} ${engineReasonText(status.reason)}.`,
-      `engine: ${status.selected}\nreason: ${status.reason || "unknown"}\ntime: ${new Date(status.at || Date.now()).toISOString()}`
+      [
+        `engine: ${status.selected}`,
+        `reason: ${status.reason || "unknown"}`,
+        `time: ${new Date(status.at || Date.now()).toISOString()}`,
+        `version: ${localVersion}`,
+        `browser: ${browserFamily()} (${navigator.userAgent.match(/(Firefox|Edg|OPR|Chrome)\/[\d.]+/)?.[0] || "unknown"})`,
+        `target: ${(settings && settings.targetLanguage) || "en"}`,
+      ].join("\n")
     );
+  }
+
+  function refreshPageHint() {
+    const hint = document.getElementById("pageHint");
+    if (!hint || !chrome?.tabs?.query) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      void chrome.runtime?.lastError;
+      const url = String((tabs && tabs[0] && tabs[0].url) || "");
+      let onBili = false;
+      try {
+        const host = new URL(url).hostname;
+        onBili = host === "bilibili.com" || host.endsWith(".bilibili.com");
+      } catch (_error) {
+      }
+      hint.style.display = url && !onBili ? "block" : "none";
+    });
+  }
+
+  function refreshShortcutHint() {
+    if (!chrome?.commands?.getAll) return;
+    try {
+      chrome.commands.getAll((commands) => {
+        void chrome.runtime?.lastError;
+        const cmd = (commands || []).find((c) => c.name === "toggle-translation");
+        if (!cmd || !cmd.shortcut) return;
+        els.enableBtn.title = (I18N.shortcutHint || "Shortcut: {k}").replace("{k}", cmd.shortcut);
+      });
+    } catch (_error) {
+    }
   }
 
   function refreshEngineStatus() {
     if (!els.engineStatus || !chrome?.tabs?.query) { updateEngineStatusLine(); return; }
     chrome.tabs.query({ url: ["*://*.bilibili.com/*", "*://bilibili.com/*"] }, (tabs) => {
-      const tab = (tabs || [])[0];
+      // Prefer the tab the user is looking at when several Bilibili tabs are open.
+      const list = tabs || [];
+      const tab = list.find((t) => t.active && t.highlighted) || list.find((t) => t.active) || list[0];
       if (!tab) { lastRuntimeStatus = null; updateEngineStatusLine(); return; }
       try {
         chrome.tabs.sendMessage(tab.id, { type: "bte:getEngineStatus" }, (resp) => {
@@ -532,6 +650,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (lastReleaseTag) applyUpdateUI(lastReleaseTag);
     else if (updateStatusKey) setUpdateStatus(updateStatusKey);
     if (document.documentElement) document.documentElement.lang = lang || "en";
+    if (els.enableBtn && els.enableBtn.title) refreshShortcutHint();
   }
 
   const MODE_ICONS = {
@@ -601,6 +720,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     applyI18n(settings.targetLanguage || "en");
     const enabled = !!settings.enabled;
     els.enableBtn.classList.toggle("on", enabled);
+    els.enableBtn.setAttribute("aria-pressed", String(enabled));
     els.enableLabel.textContent = enabled ? (I18N.on || "Translation on") : (I18N.enable || "Enable translation");
 
     els.languageSelect.value = settings.targetLanguage || "en";
@@ -767,28 +887,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  const NEGATIVE_CACHE_SENTINEL = "__BTE_NO_TRANSLATION__";
   async function refreshCacheCount() {
     if (!els.cacheCount) return;
-    const cacheKey = window.BTE?.BTE_KEYS?.PERSISTENT_CACHE_KEY || "btePersistentCacheV2";
-    if (!chrome?.storage?.local) {
-      els.cacheCount.textContent = "0";
-      return;
-    }
-    const data = await new Promise((resolve) => chrome.storage.local.get([cacheKey], resolve));
-    const blob = data?.[cacheKey];
-    const entries = blob && typeof blob === "object" ? blob.entries : null;
-    let count = 0;
-    let bytes = 0;
-    if (entries && typeof entries === "object") {
-      Object.keys(entries).forEach((key) => {
-        const value = entries[key]?.value;
-        if (value && value !== NEGATIVE_CACHE_SENTINEL) {
-          count += 1;
-          bytes += (key.length + String(value).length) * 2;
-        }
-      });
-    }
+    const store = window.BTE?.CacheStore;
+    const { count, bytes } = store ? store.stats((await store.readAll()).entries) : { count: 0, bytes: 0 };
     els.cacheCount.textContent = count.toLocaleString();
     lastCacheBytes = bytes;
     if (els.cacheSize) els.cacheSize.textContent = formatBytes(bytes);
@@ -803,12 +905,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   checkForUpdates();
   refreshCacheCount();
   refreshEngineStatus();
+  refreshPageHint();
+  refreshShortcutHint();
   setInterval(refreshEngineStatus, 3000);
-  setInterval(refreshCacheCount, 2000);
-  if (chrome?.storage?.onChanged) {
-    const cacheKey = window.BTE?.BTE_KEYS?.PERSISTENT_CACHE_KEY || "btePersistentCacheV2";
+  if (chrome?.storage?.onChanged && window.BTE?.CacheStore) {
+    let cacheRefresh = null;
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "local" && changes[cacheKey]) refreshCacheCount();
+      if (area !== "local" || !Object.keys(changes).some(window.BTE.CacheStore.isCacheKey)) return;
+      clearTimeout(cacheRefresh);
+      cacheRefresh = setTimeout(refreshCacheCount, 300);
     });
   }
 
@@ -832,7 +937,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     persist({ deepl: { fallbackToGoogle: els.deeplFallback.checked } });
   });
   els.deeplKey.addEventListener("change", () => {
-    persist({ deepl: { apiKey: els.deeplKey.value.trim() } }, "DeepL key updated");
+    persist({ deepl: { apiKey: els.deeplKey.value.trim() } });
   });
   els.deeplOptimize.addEventListener("change", () => {
     persist({ deepl: { optimizeUsage: els.deeplOptimize.checked } });
@@ -937,12 +1042,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   els.darkModeToggle.addEventListener("change", () => persist({ darkMode: els.darkModeToggle.checked }));
 
   els.clearCacheBtn.addEventListener("click", async () => {
-    const cacheKey = window.BTE?.BTE_KEYS?.PERSISTENT_CACHE_KEY || "btePersistentCacheV2";
-    if (chrome?.storage?.local) {
-      await new Promise((resolve) => chrome.storage.local.remove([cacheKey], resolve));
-    }
+    if (window.BTE?.CacheStore) await window.BTE.CacheStore.removeAll();
     sendToBiliTabs({ type: "bte:clearCache" });
     if (els.cacheCount) els.cacheCount.textContent = "0";
+    lastCacheBytes = 0;
+    if (els.cacheSize) els.cacheSize.textContent = formatBytes(0);
     showHint(I18N.hintCacheCleared || "Cache cleared");
   });
 
@@ -962,6 +1066,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     els.updateBanner.classList.remove("show");
   });
   document.getElementById("errModalClose")?.addEventListener("click", closeErrorModal);
+  document.getElementById("errModalAuto")?.addEventListener("click", () => {
+    closeErrorModal();
+    persist({ engine: "auto" });
+  });
   document.getElementById("errModal")?.addEventListener("click", (event) => {
     if (event.target && event.target.id === "errModal") closeErrorModal();
   });

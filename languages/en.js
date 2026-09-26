@@ -1,4 +1,4 @@
-const enDictionary = {
+var enDictionary = {
   "我关注的主播": "Following",
   "我的稿件":  "Drafts",
   "预约":  "Reserve",
