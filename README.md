@@ -16,7 +16,7 @@ Translate BiliBili into English (or another language) right on the page, in real
 > 
 > **Bilibili has released an official global version** with built-in auto-translation for English and other languages. 
 > 
-> You can access it directly at [bilibili.com/en](https://bilibili.com). As of right now, it is highly unlikely that this extension will still be needed. While development might resume in the future if requirements change, it is currently **no longer maintained or necessary**. Thank you for all your support!
+> You can access it directly at [bilibili.com/en](https://bilibili.com/en). As of right now, it is highly unlikely that this extension will still be needed. While development might resume in the future if requirements change, it is currently **no longer maintained or necessary**. Thank you for all your support!
 
 
 
